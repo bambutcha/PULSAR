@@ -11,8 +11,10 @@ KNOWN_WIDTH_DRONE = 15.0  # Реальный размер телефона в с
 KNOWN_WIDTH_BEACON = 10.0  # Реальный размер ArUco-маркера в см
 FOCAL_LENGTH = 600  # Калибруйте заранее: (pixel_width * distance) / real_width
 EMA_ALPHA = 0.3  # Коэффициент сглаживания (0 < alpha < 1; меньше — плавнее)
-FRAME_SIZE = (640, 480)  # Уменьшенное разрешение для скорости
+FRAME_SIZE = (640, 480)  # исходное разрешение
 COCO_CLASSES = {77: 'cell phone'}  # Только телефон
+DETECTION_INTERVAL = 5  # Интервал кадров для полной детекции (раз в 5 кадров)
+DEPTH_INTERVAL = 10  # Интервал кадров для MiDaS
 
 # Проверка cv2.aruco
 try:
@@ -40,7 +42,8 @@ transform = midas_transforms.small_transform
 last_drone_box = None
 last_drone_center = None
 last_distance_drone = None
-depth_frame_counter = 0  # Считаем кадры для редкого вызова MiDaS
+depth_frame_counter = 0  # Счетчик кадров для MiDaS
+detection_frame_counter = 0  # Счетчик кадров для детекции
 
 # Функция для экспоненциального сглаживания
 def ema_smooth(new_value, old_value, alpha=EMA_ALPHA):
@@ -50,31 +53,36 @@ def ema_smooth(new_value, old_value, alpha=EMA_ALPHA):
 
 # Функция детекции и оценки
 def detect_and_estimate(frame):
-    global last_drone_box, last_drone_center, last_distance_drone, depth_frame_counter
+    global last_drone_box, last_drone_center, last_distance_drone, depth_frame_counter, detection_frame_counter
     
-    # Уменьшаем разрешение
     frame = cv2.resize(frame, FRAME_SIZE)
     img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     img_tensor = F.to_tensor(img).unsqueeze(0).to(device)
     
-    # Детекция телефона
-    with torch.no_grad():
-        predictions = model(img_tensor)[0]
+    # Детекция телефона (раз в DETECTION_INTERVAL кадров)
+    detection_frame_counter += 1
+    if detection_frame_counter >= DETECTION_INTERVAL:
+        with torch.no_grad():
+            predictions = model(img_tensor)[0]
+        
+        boxes = predictions['boxes'].cpu().numpy()
+        labels = predictions['labels'].cpu().numpy()
+        scores = predictions['scores'].cpu().numpy()
+        
+        drone_box = None
+        for i in range(len(scores)):
+            if scores[i] > 0.7 and labels[i] == 77:  # Только 'cell phone'
+                drone_box = boxes[i]
+                break
+        
+        if drone_box is not None:
+            last_drone_box = drone_box  # Обновляем последнюю позицию
+        detection_frame_counter = 0  # Сбрасываем счетчик
+    else:
+        drone_box = last_drone_box  # Используем последнюю позицию
     
-    boxes = predictions['boxes'].cpu().numpy()
-    labels = predictions['labels'].cpu().numpy()
-    scores = predictions['scores'].cpu().numpy()
-    
-    drone_box = None
-    for i in range(len(scores)):
-        if scores[i] > 0.7 and labels[i] == 77:  # Только 'cell phone'
-            drone_box = boxes[i]
-            break
-    
-    # Если телефон не найден, используем последнюю позицию
-    if drone_box is None and last_drone_box is not None:
-        drone_box = last_drone_box
-    elif drone_box is None:
+    # Если телефон не найден и нет последней позиции, возвращаем None
+    if drone_box is None:
         return frame, None, None
     
     # Сглаживание bounding box
@@ -89,14 +97,14 @@ def detect_and_estimate(frame):
     
     # Расстояние до дрона
     pixel_width_drone = drone_box[2] - drone_box[0]
-    distance_to_drone = (KNOWN_WIDTH_DRONE * FOCAL_LENGTH) / pixel_width_drone if pixel_width_drone > 0 else 0
+    distance_to_drone = (KNOWN_WIDTH_DRONE * FOCAL_LENGTH) / pixel_width_drone if pixel_width_drone > 0 else last_distance_drone or 0
     distance_to_drone = ema_smooth(distance_to_drone, last_distance_drone)
     last_distance_drone = distance_to_drone
     
-    # Depth estimation (реже, каждые 5 кадров)
+    # Depth estimation (реже, каждые DEPTH_INTERVAL кадров)
     depth_drone = None
     depth_pred = None
-    if depth_frame_counter % 5 == 0:
+    if depth_frame_counter % DEPTH_INTERVAL == 0:
         input_batch = transform(np.array(img)).to(device)
         with torch.no_grad():
             depth_pred = midas(input_batch)
@@ -156,9 +164,14 @@ def detect_and_estimate(frame):
 
 # Основной цикл
 cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    print("Ошибка: камера не найдена")
+    exit()
+
 while True:
     ret, frame = cap.read()
     if not ret:
+        print("Ошибка: не удалось получить кадр")
         break
     
     processed_frame, dist_drone, dists_beacons = detect_and_estimate(frame)
