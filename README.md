@@ -1,6 +1,6 @@
 <div align="center">
 
-# 📍 PULSAR
+# 📍 PULSAR by SWaP
 ## Система позиционирования в условиях отсутствия GPS
 </div>
 
