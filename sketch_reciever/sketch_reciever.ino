@@ -1,7 +1,4 @@
 // ГИБРИДНЫЙ ПРИЁМНИК: WiFi + BLE Scanner + WebSocket Server
-
-#define ARDUINOJSON_ENABLE_PROGMEM 0  
-
 #include <WiFi.h>
 #include <BLEDevice.h>
 #include <BLEScan.h>
@@ -81,8 +78,7 @@ void setup() {
   Serial.println("========================================\n");
   
   // Инициализация WiFi (станция для сканирования)
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
+  WiFi.mode(WIFI_AP_STA);
   delay(100);
   
   // Инициализация BLE
@@ -97,6 +93,8 @@ void setup() {
   // Создаем свою WiFi точку для WebSocket
   Serial.println("\n[WiFi] Creating Access Point...");
   WiFi.softAP("PositioningSystem", "12345678");
+  WiFi.scanNetworks(true);  // true = async scan
+  delay(100);
   IPAddress IP = WiFi.softAPIP();
   Serial.print("[WiFi] Connect to: ");
   Serial.println(IP);
