@@ -74,6 +74,15 @@ void setup() {
   pBLEScan->setWindow(99);
 }
 
+bool compareUIDs(byte *buffer1, const byte *buffer2, byte bufferSize) {
+  for (byte i = 0; i < bufferSize; i++) {
+    if (buffer1[i] != buffer2[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // --- RFID: Функция калибровки ---
 void calibrateRFID() {
   // Проверка, есть ли карта и может ли она быть прочитана
