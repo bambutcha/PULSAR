@@ -248,42 +248,66 @@ const MapCanvas: React.FC<MapCanvasProps> = ({
 
       if (!data) return;
 
-      // WiFi маяки (адаптивное расположение)
-      Object.entries(data.wifi).forEach(([name, beacon], i) => {
-        const bx = (i + 1) * scale * (isMobile ? 1.2 : 1.5);
-        const by = isMobile ? 30 : 50;
-        ctx.fillStyle = "gold";
-        ctx.strokeStyle = "gold";
-        ctx.beginPath();
-        ctx.arc(bx, by, isMobile ? 4 : 6, 0, 2 * Math.PI);
-        ctx.fill();
+      // Позиции для 3 ESP-меток (WiFi + BLE вместе)
+      const espPositions = [
+        // Метка 1: центр снизу
+        { x: dimensions.width / 2, y: dimensions.height - (isMobile ? 40 : 60) },
+        // Метка 2: слева сверху
+        { x: dimensions.width * 0.25, y: isMobile ? 40 : 60 },
+        // Метка 3: справа сверху
+        { x: dimensions.width * 0.75, y: isMobile ? 40 : 60 }
+      ];
 
-        // Радиус сигнала (только если не мобильный или большой экран)
-        if (!isMobile || dimensions.width > 400) {
-          ctx.globalAlpha = 0.2;
+      // Отрисовка ESP-меток (WiFi и BLE вместе)
+      espPositions.forEach((pos, index) => {
+        const beaconNumber = index + 1;
+        const wifiBeacon = data.wifi[`beacon${beaconNumber}`];
+        const bleBeacon = data.ble[`beacon${beaconNumber}`];
+
+        if (wifiBeacon) {
+          // WiFi точка (слева от центра метки)
+          const wifiX = pos.x - 15;
+          ctx.fillStyle = "gold";
+          ctx.strokeStyle = "gold";
           ctx.beginPath();
-          ctx.arc(bx, by, beacon.distance * scale, 0, 2 * Math.PI);
-          ctx.stroke();
-          ctx.globalAlpha = 1;
+          ctx.arc(wifiX, pos.y, isMobile ? 4 : 6, 0, 2 * Math.PI);
+          ctx.fill();
+
+          // Радиус сигнала WiFi
+          if (!isMobile || dimensions.width > 400) {
+            ctx.globalAlpha = 0.2;
+            ctx.beginPath();
+            ctx.arc(wifiX, pos.y, wifiBeacon.distance * scale, 0, 2 * Math.PI);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+          }
         }
-      });
 
-      // BLE маяки
-      Object.entries(data.ble).forEach(([name, beacon], i) => {
-        const bx = (i + 1) * scale * (isMobile ? 1.2 : 1.5);
-        const by = isMobile ? dimensions.height - 30 : 150;
-        ctx.fillStyle = "deepskyblue";
-        ctx.strokeStyle = "deepskyblue";
-        ctx.beginPath();
-        ctx.arc(bx, by, isMobile ? 4 : 6, 0, 2 * Math.PI);
-        ctx.fill();
-
-        if (!isMobile || dimensions.width > 400) {
-          ctx.globalAlpha = 0.2;
+        if (bleBeacon) {
+          // BLE точка (справа от центра метки)
+          const bleX = pos.x + 15;
+          ctx.fillStyle = "deepskyblue";
+          ctx.strokeStyle = "deepskyblue";
           ctx.beginPath();
-          ctx.arc(bx, by, beacon.distance * scale, 0, 2 * Math.PI);
-          ctx.stroke();
-          ctx.globalAlpha = 1;
+          ctx.arc(bleX, pos.y, isMobile ? 4 : 6, 0, 2 * Math.PI);
+          ctx.fill();
+
+          // Радиус сигнала BLE
+          if (!isMobile || dimensions.width > 400) {
+            ctx.globalAlpha = 0.2;
+            ctx.beginPath();
+            ctx.arc(bleX, pos.y, bleBeacon.distance * scale, 0, 2 * Math.PI);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+          }
+        }
+
+        // Подписи для ESP-меток (только на десктопе)
+        if (!isMobile) {
+          ctx.fillStyle = "#fff";
+          ctx.font = "12px Arial";
+          ctx.textAlign = "center";
+          ctx.fillText(`ESP${beaconNumber}`, pos.x, pos.y - 25);
         }
       });
 
@@ -373,7 +397,6 @@ const MobileSidebar: React.FC<MobileSidebarProps> = ({ data, isOpen, onClose }) 
       </div>
       <div className="mobile-sidebar-content">
         <PositionInfo position={data?.position || null} />
-        {/* ДОБАВИТЬ EnvironmentInfo */}
         <EnvironmentInfo environment={data?.environment || null} isMobile={true} />
         <FusionInfo fusion={data?.fusion || null} isMobile={true} />
         <BeaconList beacons={data?.wifi || null} type="WiFi" isMobile={true} />
