@@ -85,7 +85,7 @@ func (h *Hub) Run() {
 		case message := <-h.broadcast:
 			for conn := range h.clients {
 				if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
-					h.logger.Error("WebSocket write error: %v", err)
+					h.logger.Debug("WebSocket write error (client disconnected): %v", err)
 					delete(h.clients, conn)
 					conn.Close()
 				}
@@ -97,8 +97,12 @@ func (h *Hub) Run() {
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
-		// Разрешаем подключения с localhost:5173 (Vite dev server)
-		return origin == "http://localhost:5173" || origin == "http://127.0.0.1:5173"
+		// Разрешаем подключения с localhost:5173 (Vite dev server) и другие localhost порты
+		return origin == "http://localhost:5173" || 
+			   origin == "http://127.0.0.1:5173" ||
+			   origin == "http://localhost:3000" ||
+			   origin == "http://127.0.0.1:3000" ||
+			   origin == ""
 	},
 }
 
@@ -150,13 +154,22 @@ func (sr *SerialReader) ReadAndBroadcast() {
 	}
 
 	scanner := bufio.NewScanner(sr.port)
+	buf := make([]byte, 0, 64*1024) // 64KB буфер
+	scanner.Buffer(buf, 1024*1024)   // Максимум 1MB
+	
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
 
-		sr.logger.Debug("📥 Received: %s", line)
+		// Проверяем, является ли строка JSON (начинается с {)
+		if !strings.HasPrefix(line, "{") {
+			// Это отладочное сообщение от ESP32, игнорируем
+			continue
+		}
+
+		sr.logger.Debug("📥 Received JSON: %s", line)
 
 		// Парсинг JSON от ESP32
 		var esp32Data ESP32Data

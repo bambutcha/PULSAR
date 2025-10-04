@@ -44,7 +44,7 @@ float yBuffer[SMOOTH_SIZE] = {0};
 int bufferIdx = 0;
 
 unsigned long lastScan = 0;
-const int SCAN_INTERVAL = 2000;
+const int SCAN_INTERVAL = 1000; // 1 секунда
 
 void setup() {
   Serial.begin(115200);

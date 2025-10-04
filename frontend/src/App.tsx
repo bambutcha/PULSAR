@@ -28,6 +28,7 @@ interface ESPData {
   cv?: Position;
 }
 
+<<<<<<< HEAD
 // -------------------- RESPONSIVE HOOK --------------------
 const useResponsive = () => {
   const [windowSize, setWindowSize] = useState({
@@ -55,41 +56,69 @@ const useResponsive = () => {
 
   return { windowSize, isMobile, isTablet };
 };
+=======
+// -------------------- WEBSOCKET SINGLETON --------------------
+let globalWS: WebSocket | null = null;
+let globalCallbacks: Set<(data: ESPData | null, connected: boolean) => void> = new Set();
+
+function connectWebSocket(url: string) {
+  if (globalWS && globalWS.readyState === WebSocket.OPEN) {
+    return; // Уже подключен
+  }
+
+  if (globalWS) {
+    globalWS.close();
+  }
+
+  globalWS = new WebSocket(url);
+  
+  globalWS.onopen = () => {
+    globalCallbacks.forEach(callback => callback(null, true));
+  };
+  
+  globalWS.onmessage = (event) => {
+    try {
+      const message = JSON.parse(event.data);
+      if (message.type === "position_update" && message.data) {
+        globalCallbacks.forEach(callback => callback(message.data, true));
+      }
+    } catch (err) {
+      console.error("Invalid JSON", err);
+    }
+  };
+  
+  globalWS.onclose = () => {
+    globalCallbacks.forEach(callback => callback(null, false));
+    setTimeout(() => connectWebSocket(url), 2000);
+  };
+  
+  globalWS.onerror = (err) => {
+    console.error("WebSocket error", err);
+    globalCallbacks.forEach(callback => callback(null, false));
+  };
+}
+>>>>>>> fc67cfddccb38f20763cd2132333a35f8ec6dd5e
 
 // -------------------- WEBSOCKET HOOK --------------------
 function useWebSocket(url: string) {
   const [data, setData] = useState<ESPData | null>(null);
   const [connected, setConnected] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    let ws: WebSocket;
-
-    function connect() {
-      ws = new WebSocket(url);
-      wsRef.current = ws;
-
-      ws.onopen = () => setConnected(true);
-      ws.onmessage = (event) => {
-        try {
-          const json: ESPData = JSON.parse(event.data);
-          setData(json);
-        } catch (err) {
-          console.error("Invalid JSON", err);
-        }
-      };
-      ws.onclose = () => {
-        setConnected(false);
-        setTimeout(connect, 2000);
-      };
-      ws.onerror = (err) => {
-        console.error("WebSocket error", err);
-        ws.close();
-      };
-    }
-
-    connect();
-    return () => ws.close();
+    // Подключаемся к глобальному WebSocket
+    connectWebSocket(url);
+    
+    // Добавляем callback
+    const callback = (newData: ESPData | null, isConnected: boolean) => {
+      setData(newData);
+      setConnected(isConnected);
+    };
+    
+    globalCallbacks.add(callback);
+    
+    return () => {
+      globalCallbacks.delete(callback);
+    };
   }, [url]);
 
   return { data, connected };
@@ -180,7 +209,7 @@ const MapCanvas: React.FC<MapCanvasProps> = ({
       if (!ctx) return;
 
       // Линейная интерполяция
-      if (data) {
+      if (data && data.position) {
         currentPosRef.current.x += (data.position.x - currentPosRef.current.x) * 0.1;
         currentPosRef.current.y += (data.position.y - currentPosRef.current.y) * 0.1;
         currentPosRef.current.accuracy += (data.position.accuracy - currentPosRef.current.accuracy) * 0.1;
