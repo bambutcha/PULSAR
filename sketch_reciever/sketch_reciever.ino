@@ -5,8 +5,6 @@
 #include <BLEAdvertisedDevice.h>
 #include <ArduinoJson.h>
 #include <math.h>
-#include <SPI.h>
-#include <MFRC522.h>
 
 struct Beacon {
   int id;
@@ -30,13 +28,6 @@ Beacon beacons[3] = {
 const float WIFI_RSSI_AT_1M = -40;
 const float BLE_RSSI_AT_1M = -59;
 const float PATH_LOSS = 2.5;
-const byte ZERO_POINT_UID[] = {0xDE, 0xAD, 0xBE, 0xEF}; // ТЕСТОВЫЙ UID
-const byte UID_SIZE = 4; // Обычно UID имеет размер 4 байта
-
-#define RST_PIN   22   // RST (Reset) на ESP32 GPIO 22
-#define SS_PIN    21   // SDA (Slave Select) на ESP32 GPIO 21
-MFRC522 rfid(SS_PIN, RST_PIN); 
-bool isCalibrated = false;
 
 struct Position {
   float x, y, accuracy;
@@ -58,10 +49,6 @@ const int SCAN_INTERVAL = 2000;
 void setup() {
   Serial.begin(115200);
   delay(1000);
-
-  SPI.begin();       // Инициализация SPI шины
-  rfid.PCD_Init();   // Инициализация считывателя RC522
-  Serial.println(F("RFID инициирован. Ожидание метки Нулевой Точки..."));
   
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
@@ -74,65 +61,7 @@ void setup() {
   pBLEScan->setWindow(99);
 }
 
-bool compareUIDs(byte *buffer1, const byte *buffer2, byte bufferSize) {
-  for (byte i = 0; i < bufferSize; i++) {
-    if (buffer1[i] != buffer2[i]) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// --- RFID: Функция калибровки ---
-void calibrateRFID() {
-  // Проверка, есть ли карта и может ли она быть прочитана
-  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-    
-    // Сравнение считанного UID с UID нулевой точки
-    if (compareUIDs(rfid.uid.uidByte, ZERO_POINT_UID, rfid.uid.size)) {
-      
-      Serial.println("\n*** RFID КАЛИБРОВКА УСПЕШНА ***");
-      Serial.println("Установка местоположения: X=0.0, Y=0.0");
-      
-      // 1. Установка текущих координат в (0, 0)
-      currentPos.x = 0.0;
-      currentPos.y = 0.0;
-      currentPos.accuracy = 0.0;
-      
-      // 2. Сброс буферов сглаживания
-      for (int i = 0; i < SMOOTH_SIZE; i++) {
-        xBuffer[i] = 0.0;
-        yBuffer[i] = 0.0;
-      }
-      bufferIdx = 0;
-      
-      // 3. Флаг, что калибровка выполнена
-      isCalibrated = true;
-      
-      // 4. Оповещение об успешной калибровке
-      Serial.println("*** СИСТЕМА ПОЗИЦИОНИРОВАНИЯ ГОТОВА ***\n");
-      
-    } else {
-      Serial.print("Обнаружена неизвестная RFID метка. UID: ");
-      for (byte i = 0; i < rfid.uid.size; i++) {
-        Serial.print(rfid.uid.uidByte[i] < 0x10 ? " 0" : " ");
-        Serial.print(rfid.uid.uidByte[i], HEX);
-      }
-      Serial.println();
-    }
-    
-    rfid.PICC_HaltA();
-    rfid.PCD_StopCrypto1();
-  }
-}
-
 void loop() {
-  if (!isCalibrated) {
-    calibrateRFID();
-    delay(500); // Непрерывный опрос
-    return; 
-  }
-
   unsigned long now = millis();
   
   if (now - lastScan > SCAN_INTERVAL) {
