@@ -5,6 +5,17 @@
 #include <BLEAdvertisedDevice.h>
 #include <ArduinoJson.h>
 #include <math.h>
+#include "DHT.h"
+
+// --- DHT11 ДАТЧИК ---
+#define DHTPIN 4     // Используйте свободный GPIO (например, GPIO 4)
+#define DHTTYPE DHT11 // Тип вашего датчика
+
+DHT dht(DHTPIN, DHTTYPE);
+
+float currentTemp = 0.0;
+float currentHumidity = 0.0;
+// --------------------
 
 struct Beacon {
   int id;
@@ -46,9 +57,32 @@ int bufferIdx = 0;
 unsigned long lastScan = 0;
 const int SCAN_INTERVAL = 1000; // 1 секунда
 
+// --- ФУНКЦИЯ ЧТЕНИЯ DHT ---
+void readDHT() {
+  // Чтение занимает около 1 секунды, не вызывайте чаще
+  float h = dht.readHumidity();
+  float t = dht.readTemperature(); 
+  
+  // Проверка на ошибки (датчик может вернуть NaN)
+  if (isnan(h) || isnan(t)) {
+    Serial.println(F("  ❌ ОШИБКА: Не удалось считать данные с DHT11."));
+    return;
+  }
+  
+  currentHumidity = h;
+  currentTemp = t;
+
+  Serial.print("  Temp: "); Serial.print(currentTemp, 1); Serial.print("°C | ");
+  Serial.print("Humidity: "); Serial.print(currentHumidity, 1); Serial.println("%");
+}
+// -------------------------
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
+  
+  // Инициализация DHT
+  dht.begin();
   
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
@@ -66,6 +100,9 @@ void loop() {
   
   if (now - lastScan > SCAN_INTERVAL) {
     lastScan = now;
+    
+    // Вызов функции чтения DHT
+    readDHT();
     
     scanWiFi();
     scanBLE();
@@ -271,6 +308,11 @@ void printStatus() {
   Serial.println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   Serial.println("📊 STATUS SUMMARY\n");
   
+  // --- ДОБАВИТЬ ВЫВОД СТАТУСА DHT ---
+  Serial.print("Environment: Temp: "); Serial.print(currentTemp, 1); 
+  Serial.print("°C, Humidity: "); Serial.print(currentHumidity, 1); Serial.println("%");
+  // ------------------------------------
+  
   Serial.println("Beacon Status:");
   for (int i = 0; i < 3; i++) {
     Serial.print("  Beacon "); Serial.print(i+1); Serial.print(": ");
@@ -294,6 +336,12 @@ void sendJSON() {
   StaticJsonDocument<1024> doc;
   
   doc["timestamp"] = millis();
+  
+  // --- ДОБАВЛЕНИЕ DHT ДАННЫХ В JSON ---
+  JsonObject env = doc.createNestedObject("environment");
+  env["temperature"] = currentTemp;
+  env["humidity"] = currentHumidity;
+  // ------------------------------------
   
   JsonObject pos = doc.createNestedObject("position");
   pos["x"] = currentPos.x;
