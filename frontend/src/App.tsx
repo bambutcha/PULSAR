@@ -28,7 +28,6 @@ interface ESPData {
   cv?: Position;
 }
 
-<<<<<<< HEAD
 // -------------------- RESPONSIVE HOOK --------------------
 const useResponsive = () => {
   const [windowSize, setWindowSize] = useState({
@@ -56,7 +55,7 @@ const useResponsive = () => {
 
   return { windowSize, isMobile, isTablet };
 };
-=======
+
 // -------------------- WEBSOCKET SINGLETON --------------------
 let globalWS: WebSocket | null = null;
 let globalCallbacks: Set<(data: ESPData | null, connected: boolean) => void> = new Set();
@@ -97,7 +96,6 @@ function connectWebSocket(url: string) {
     globalCallbacks.forEach(callback => callback(null, false));
   };
 }
->>>>>>> fc67cfddccb38f20763cd2132333a35f8ec6dd5e
 
 // -------------------- WEBSOCKET HOOK --------------------
 function useWebSocket(url: string) {
@@ -495,7 +493,7 @@ export default function App() {
         <div className="header-content">
           <div className="header-main">
             <h1>Indoor Positioning System</h1>
-            <div className={`status ${connected ? "connected" : "disconnected"}`}>
+            <div className={`status ${connected ? "connected" : "disconnected"}`} style={{ marginRight: '8px' }}>
               {connected ? "🟢 Connected" : "🔴 Disconnected"}
             </div>
           </div>
