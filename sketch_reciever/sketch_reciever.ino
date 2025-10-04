@@ -122,7 +122,7 @@ void calibrateRFID() {
     }
     
     rfid.PICC_HaltA();
-    rfid.PCD_StopCrypto1(true);
+    rfid.PCD_StopCrypto1();
   }
 }
 
