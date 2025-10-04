@@ -35,12 +35,18 @@ type FusionData struct {
 	BLEWeight  float64 `json:"ble_weight"`
 }
 
+type EnvironmentData struct {
+	Temperature float64 `json:"temperature"`
+	Humidity    float64 `json:"humidity"`
+}
+
 type ESP32Data struct {
-	Timestamp int64                 `json:"timestamp"`
-	Position  Position              `json:"position"`
-	WiFi      map[string]BeaconData `json:"wifi"`
-	BLE       map[string]BeaconData `json:"ble"`
-	Fusion    FusionData            `json:"fusion"`
+	Timestamp   int64                 `json:"timestamp"`
+	Position    Position              `json:"position"`
+	WiFi        map[string]BeaconData `json:"wifi"`
+	BLE         map[string]BeaconData `json:"ble"`
+	Fusion      FusionData            `json:"fusion"`
+	Environment EnvironmentData        `json:"environment"`
 }
 
 type WSMessage struct {
@@ -194,8 +200,9 @@ func (sr *SerialReader) ReadAndBroadcast() {
 
 		// Отправка через WebSocket Hub
 		sr.hub.broadcast <- messageBytes
-		sr.logger.Debug("📤 Broadcasted position: (%.2f, %.2f) ±%.2fm", 
-			esp32Data.Position.X, esp32Data.Position.Y, esp32Data.Position.Accuracy)
+		sr.logger.Debug("📤 Broadcasted position: (%.2f, %.2f) ±%.2fm | Temp: %.1f°C, Humidity: %.1f%%", 
+			esp32Data.Position.X, esp32Data.Position.Y, esp32Data.Position.Accuracy,
+			esp32Data.Environment.Temperature, esp32Data.Environment.Humidity)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -250,6 +257,10 @@ func (sr *SerialReader) GenerateTestData() {
 				WiFiWeight: 0.6,
 				BLEWeight:  0.4,
 			},
+			Environment: EnvironmentData{
+				Temperature: 22.5 + (x/10.0), // Симуляция изменения температуры
+				Humidity:    45.0 + (y/5.0),   // Симуляция изменения влажности
+			},
 		}
 
 		// Создание WebSocket сообщения
@@ -268,8 +279,9 @@ func (sr *SerialReader) GenerateTestData() {
 
 		// Отправка через WebSocket Hub
 		sr.hub.broadcast <- messageBytes
-		sr.logger.Debug("🧪 Test data: (%.2f, %.2f) ±%.2fm", 
-			testData.Position.X, testData.Position.Y, testData.Position.Accuracy)
+		sr.logger.Debug("🧪 Test data: (%.2f, %.2f) ±%.2fm | Temp: %.1f°C, Humidity: %.1f%%", 
+			testData.Position.X, testData.Position.Y, testData.Position.Accuracy,
+			testData.Environment.Temperature, testData.Environment.Humidity)
 	}
 }
 
