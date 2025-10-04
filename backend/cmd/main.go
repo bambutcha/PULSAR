@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -94,7 +96,9 @@ func (h *Hub) Run() {
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Разрешаем все origin для разработки
+		origin := r.Header.Get("Origin")
+		// Разрешаем подключения с localhost:5173 (Vite dev server)
+		return origin == "http://localhost:5173" || origin == "http://127.0.0.1:5173"
 	},
 }
 
@@ -105,6 +109,155 @@ func handleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hub.register <- conn
+}
+
+// Serial Reader
+type SerialReader struct {
+	port   serial.Port
+	hub    *Hub
+	logger *logger.Logger
+}
+
+func NewSerialReader(hub *Hub, logger *logger.Logger) *SerialReader {
+	return &SerialReader{
+		hub:    hub,
+		logger: logger,
+	}
+}
+
+func (sr *SerialReader) Connect(portName string) error {
+	mode := &serial.Mode{
+		BaudRate: 115200,
+		DataBits: 8,
+		Parity:   serial.NoParity,
+		StopBits: serial.OneStopBit,
+	}
+
+	port, err := serial.Open(portName, mode)
+	if err != nil {
+		return fmt.Errorf("failed to open serial port %s: %v", portName, err)
+	}
+
+	sr.port = port
+	sr.logger.Info("📡 Connected to serial port: %s", portName)
+	return nil
+}
+
+func (sr *SerialReader) ReadAndBroadcast() {
+	if sr.port == nil {
+		sr.logger.Error("Serial port not connected")
+		return
+	}
+
+	scanner := bufio.NewScanner(sr.port)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		sr.logger.Debug("📥 Received: %s", line)
+
+		// Парсинг JSON от ESP32
+		var esp32Data ESP32Data
+		if err := json.Unmarshal([]byte(line), &esp32Data); err != nil {
+			sr.logger.Error("❌ Failed to parse JSON: %v", err)
+			continue
+		}
+
+		// Создание WebSocket сообщения
+		wsMessage := WSMessage{
+			Type:      "position_update",
+			Data:      esp32Data,
+			Timestamp: time.Now().UnixMilli(),
+		}
+
+		// Конвертация в JSON
+		messageBytes, err := json.Marshal(wsMessage)
+		if err != nil {
+			sr.logger.Error("❌ Failed to marshal WebSocket message: %v", err)
+			continue
+		}
+
+		// Отправка через WebSocket Hub
+		sr.hub.broadcast <- messageBytes
+		sr.logger.Debug("📤 Broadcasted position: (%.2f, %.2f) ±%.2fm", 
+			esp32Data.Position.X, esp32Data.Position.Y, esp32Data.Position.Accuracy)
+	}
+
+	if err := scanner.Err(); err != nil {
+		sr.logger.Error("❌ Serial scanner error: %v", err)
+	}
+}
+
+func (sr *SerialReader) Close() error {
+	if sr.port != nil {
+		return sr.port.Close()
+	}
+	return nil
+}
+
+// Генератор тестовых данных для демонстрации
+func (sr *SerialReader) GenerateTestData() {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	// Начальная позиция
+	x, y := 1.0, 1.0
+	direction := 1.0
+
+	for range ticker.C {
+		// Симуляция движения по кругу
+		x += 0.1 * direction
+		y += 0.05 * direction
+		
+		if x > 4.0 || x < 0.5 {
+			direction *= -1
+		}
+
+		// Создание тестовых данных
+		testData := ESP32Data{
+			Timestamp: time.Now().UnixMilli(),
+			Position: Position{
+				X:        x,
+				Y:        y,
+				Accuracy: 0.5 + (x/10.0), // Изменяющаяся точность
+			},
+			WiFi: map[string]BeaconData{
+				"beacon1": {RSSI: -45, Distance: 2.1, Found: true},
+				"beacon2": {RSSI: -52, Distance: 3.4, Found: true},
+				"beacon3": {RSSI: -48, Distance: 2.8, Found: true},
+			},
+			BLE: map[string]BeaconData{
+				"beacon1": {RSSI: -65, Distance: 2.3, Found: true},
+				"beacon2": {RSSI: -72, Distance: 3.6, Found: true},
+				"beacon3": {RSSI: -68, Distance: 3.0, Found: true},
+			},
+			Fusion: FusionData{
+				WiFiWeight: 0.6,
+				BLEWeight:  0.4,
+			},
+		}
+
+		// Создание WebSocket сообщения
+		wsMessage := WSMessage{
+			Type:      "position_update",
+			Data:      testData,
+			Timestamp: time.Now().UnixMilli(),
+		}
+
+		// Конвертация в JSON
+		messageBytes, err := json.Marshal(wsMessage)
+		if err != nil {
+			sr.logger.Error("❌ Failed to marshal test message: %v", err)
+			continue
+		}
+
+		// Отправка через WebSocket Hub
+		sr.hub.broadcast <- messageBytes
+		sr.logger.Debug("🧪 Test data: (%.2f, %.2f) ±%.2fm", 
+			testData.Position.X, testData.Position.Y, testData.Position.Accuracy)
+	}
 }
 
 func main() {
@@ -121,6 +274,28 @@ func main() {
 	// Создание WebSocket Hub
 	hub := NewHub(logger)
 	go hub.Run()
+
+	// Создание Serial Reader
+	serialReader := NewSerialReader(hub, logger)
+	
+	// Попытка подключения к Serial порту (по умолчанию /dev/ttyUSB0)
+	portName := "/dev/ttyUSB0"
+	if len(os.Args) > 1 {
+		portName = os.Args[1]
+	}
+	
+	if err := serialReader.Connect(portName); err != nil {
+		logger.Warning("⚠️  Serial connection failed: %v", err)
+		logger.Warning("💡 Usage: %s [serial_port]", os.Args[0])
+		logger.Warning("💡 Example: %s /dev/ttyUSB0", os.Args[0])
+		logger.Info("🧪 Starting test data generator for demo...")
+		// Запуск генератора тестовых данных
+		go serialReader.GenerateTestData()
+	} else {
+		defer serialReader.Close()
+		// Запуск чтения Serial порта в отдельной горутине
+		go serialReader.ReadAndBroadcast()
+	}
 
 	// HTTP сервер для WebSocket
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -167,6 +342,8 @@ func main() {
 	logger.Info("✅ Server started successfully")
 	logger.Info("📡 WebSocket endpoint: ws://localhost:8080/ws")
 	logger.Info("🌐 Test page: http://localhost:8080/")
+	logger.Info("📡 Serial port: %s", portName)
+	logger.Info("🔄 Reading ESP32 data and broadcasting via WebSocket...")
 
 	// Ожидание сигнала завершения
 	<-sigChan
