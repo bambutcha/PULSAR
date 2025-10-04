@@ -1,0 +1,96 @@
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #121212;
+  color: #fff;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px 25px;
+  background-color: #1e1e1e;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+  border-bottom: 1px solid #333;
+}
+
+.status.connected { color: #0f0; font-weight: bold; }
+.status.disconnected { color: #f00; font-weight: bold; }
+
+.main-content {
+  display: flex;
+  flex: 1;
+  padding: 15px;
+  gap: 20px;
+  overflow: hidden;
+}
+
+.map-canvas {
+  flex: 1;
+  border-radius: 15px;
+  box-shadow: 0 0 15px rgba(0,255,255,0.3);
+}
+
+.sidebar {
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  overflow-y: auto;
+}
+
+.info-card {
+  background-color: #1f1f1f;
+  padding: 15px;
+  border-radius: 12px;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+  transition: transform 0.2s;
+}
+.info-card:hover { transform: translateY(-3px); }
+
+.info-card h3 {
+  margin: 0 0 8px 0;
+  font-size: 1.1em;
+  color: #0ff;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+th, td {
+  padding: 6px;
+  text-align: left;
+  border-bottom: 1px solid #333;
+}
+.not-found { color: #888; }
+
+.fusion-bar {
+  margin: 6px 0;
+}
+.fusion-bar span { display: block; margin-bottom: 2px; }
+.bar {
+  height: 12px;
+  border-radius: 6px;
+  background-color: #333;
+  overflow: hidden;
+}
+.bar.wifi { background-color: gold; transition: width 0.3s ease; }
+.bar.ble { background-color: deepskyblue; transition: width 0.3s ease; }
+
+.footer {
+  padding: 10px 20px;
+  background-color: #1e1e1e;
+  border-top: 1px solid #333;
+  font-size: 12px;
+  display: flex;
+  justify-content: space-between;
+}
