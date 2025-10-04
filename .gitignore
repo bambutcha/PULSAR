@@ -1,2 +1,3 @@
 ./backend/pulsar.log
 ./backend/cmd/pulsar.log
+./backend/cmd/main

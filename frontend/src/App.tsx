@@ -36,32 +36,54 @@ function useWebSocket(url: string) {
 
   useEffect(() => {
     let ws: WebSocket;
+    let reconnectTimeout: NodeJS.Timeout;
 
     function connect() {
+      // Закрываем предыдущее подключение если есть
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+
       ws = new WebSocket(url);
       wsRef.current = ws;
 
-      ws.onopen = () => setConnected(true);
+      ws.onopen = () => {
+        setConnected(true);
+        console.log("WebSocket connected");
+      };
+      
       ws.onmessage = (event) => {
         try {
-          const json: ESPData = JSON.parse(event.data);
-          setData(json);
+          const message = JSON.parse(event.data);
+          // Backend отправляет данные в формате {type, data, timestamp}
+          if (message.type === "position_update" && message.data) {
+            setData(message.data);
+          }
         } catch (err) {
           console.error("Invalid JSON", err);
         }
       };
+      
       ws.onclose = () => {
         setConnected(false);
-        setTimeout(connect, 2000);
+        console.log("WebSocket disconnected, reconnecting in 2s...");
+        reconnectTimeout = setTimeout(connect, 2000);
       };
+      
       ws.onerror = (err) => {
         console.error("WebSocket error", err);
-        ws.close();
+        setConnected(false);
       };
     }
 
     connect();
-    return () => ws.close();
+    
+    return () => {
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
   }, [url]);
 
   return { data, connected };
@@ -108,7 +130,7 @@ const MapCanvas: React.FC<MapCanvasProps> = ({
       if (!ctx) return;
 
       // Линейная интерполяция
-      if (data) {
+      if (data && data.position) {
         currentPosRef.current.x += (data.position.x - currentPosRef.current.x) * 0.1;
         currentPosRef.current.y += (data.position.y - currentPosRef.current.y) * 0.1;
         currentPosRef.current.accuracy += (data.position.accuracy - currentPosRef.current.accuracy) * 0.1;
