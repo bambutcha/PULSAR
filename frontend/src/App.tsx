@@ -19,6 +19,11 @@ interface Fusion {
   ble_weight: number;
 }
 
+interface Environment {
+  temperature: number;
+  humidity: number;
+}
+
 interface ESPData {
   timestamp: number;
   position: Position;
@@ -26,6 +31,7 @@ interface ESPData {
   ble: Record<string, BeaconData>;
   fusion: Fusion;
   cv?: Position;
+  environment?: Environment;
 }
 
 // -------------------- RESPONSIVE HOOK --------------------
@@ -367,11 +373,40 @@ const MobileSidebar: React.FC<MobileSidebarProps> = ({ data, isOpen, onClose }) 
       </div>
       <div className="mobile-sidebar-content">
         <PositionInfo position={data?.position || null} />
-        <FusionInfo fusion={data?.fusion || null} />
+        {/* ДОБАВИТЬ EnvironmentInfo */}
+        <EnvironmentInfo environment={data?.environment || null} isMobile={true} />
+        <FusionInfo fusion={data?.fusion || null} isMobile={true} />
         <BeaconList beacons={data?.wifi || null} type="WiFi" isMobile={true} />
         <BeaconList beacons={data?.ble || null} type="BLE" isMobile={true} />
       </div>
     </div>
+  );
+};
+
+// -------------------- ENVIRONMENT INFO COMPONENT --------------------
+const EnvironmentInfo: React.FC<{ environment: Environment | null; isMobile?: boolean }> = ({ 
+  environment, 
+  isMobile = false 
+}) => {
+  if (!environment) return null;
+  
+  return (
+    <InfoCard title="Environment" isMobile={isMobile}>
+      <div className="environment-data">
+        <div className="environment-item">
+          <span className="env-label">Temperature:</span>
+          <span className="env-value temperature">
+            {environment.temperature.toFixed(1)}°C
+          </span>
+        </div>
+        <div className="environment-item">
+          <span className="env-label">Humidity:</span>
+          <span className="env-value humidity">
+            {environment.humidity.toFixed(1)}%
+          </span>
+        </div>
+      </div>
+    </InfoCard>
   );
 };
 
@@ -522,6 +557,7 @@ export default function App() {
         {!isMobile && (
           <aside className="sidebar">
             <PositionInfo position={data?.position || null} />
+            <EnvironmentInfo environment={data?.environment || null} />
             <FusionInfo fusion={data?.fusion || null} />
             <BeaconList beacons={data?.wifi || null} type="WiFi" />
             <BeaconList beacons={data?.ble || null} type="BLE" />

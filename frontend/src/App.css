@@ -339,6 +339,51 @@ th {
   color: #666;
 }
 
+/* Environment Info Styles */
+.environment-data {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.environment-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.env-label {
+  font-size: 14px;
+  color: #ccc;
+}
+
+.env-value {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.env-value.temperature {
+  color: #ff6b6b;
+}
+
+.env-value.humidity {
+  color: #4fc3f7;
+}
+
+/* Для мобильной версии */
+.info-card.mobile .environment-item {
+  padding: 6px 0;
+}
+
+.info-card.mobile .env-label {
+  font-size: 13px;
+}
+
+.info-card.mobile .env-value {
+  font-size: 13px;
+}
+
 /* Footer */
 .footer {
   background-color: #1e1e1e;
