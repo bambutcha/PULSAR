@@ -28,61 +28,66 @@ interface ESPData {
   cv?: Position;
 }
 
+// -------------------- WEBSOCKET SINGLETON --------------------
+let globalWS: WebSocket | null = null;
+let globalCallbacks: Set<(data: ESPData | null, connected: boolean) => void> = new Set();
+
+function connectWebSocket(url: string) {
+  if (globalWS && globalWS.readyState === WebSocket.OPEN) {
+    return; // Уже подключен
+  }
+
+  if (globalWS) {
+    globalWS.close();
+  }
+
+  globalWS = new WebSocket(url);
+  
+  globalWS.onopen = () => {
+    globalCallbacks.forEach(callback => callback(null, true));
+  };
+  
+  globalWS.onmessage = (event) => {
+    try {
+      const message = JSON.parse(event.data);
+      if (message.type === "position_update" && message.data) {
+        globalCallbacks.forEach(callback => callback(message.data, true));
+      }
+    } catch (err) {
+      console.error("Invalid JSON", err);
+    }
+  };
+  
+  globalWS.onclose = () => {
+    globalCallbacks.forEach(callback => callback(null, false));
+    setTimeout(() => connectWebSocket(url), 2000);
+  };
+  
+  globalWS.onerror = (err) => {
+    console.error("WebSocket error", err);
+    globalCallbacks.forEach(callback => callback(null, false));
+  };
+}
+
 // -------------------- WEBSOCKET HOOK --------------------
 function useWebSocket(url: string) {
   const [data, setData] = useState<ESPData | null>(null);
   const [connected, setConnected] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    let ws: WebSocket;
-    let reconnectTimeout: NodeJS.Timeout;
-
-    function connect() {
-      // Закрываем предыдущее подключение если есть
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-
-      ws = new WebSocket(url);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        setConnected(true);
-        console.log("WebSocket connected");
-      };
-      
-      ws.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          // Backend отправляет данные в формате {type, data, timestamp}
-          if (message.type === "position_update" && message.data) {
-            setData(message.data);
-          }
-        } catch (err) {
-          console.error("Invalid JSON", err);
-        }
-      };
-      
-      ws.onclose = () => {
-        setConnected(false);
-        console.log("WebSocket disconnected, reconnecting in 2s...");
-        reconnectTimeout = setTimeout(connect, 2000);
-      };
-      
-      ws.onerror = (err) => {
-        console.error("WebSocket error", err);
-        setConnected(false);
-      };
-    }
-
-    connect();
+    // Подключаемся к глобальному WebSocket
+    connectWebSocket(url);
+    
+    // Добавляем callback
+    const callback = (newData: ESPData | null, isConnected: boolean) => {
+      setData(newData);
+      setConnected(isConnected);
+    };
+    
+    globalCallbacks.add(callback);
     
     return () => {
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+      globalCallbacks.delete(callback);
     };
   }, [url]);
 

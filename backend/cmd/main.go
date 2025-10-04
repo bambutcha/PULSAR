@@ -154,6 +154,9 @@ func (sr *SerialReader) ReadAndBroadcast() {
 	}
 
 	scanner := bufio.NewScanner(sr.port)
+	buf := make([]byte, 0, 64*1024) // 64KB буфер
+	scanner.Buffer(buf, 1024*1024)   // Максимум 1MB
+	
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
