@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+presentation.md
+questions.md
+sketch_reciever/diff.md
