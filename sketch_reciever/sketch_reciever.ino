@@ -107,7 +107,7 @@ const float PATH_LOSS = 2.5;
 
 float prevX = 0, prevY = 0;
 unsigned long prevTime = 0;
-const float maxSpeed = 1.0; // м/с  // Фильтр движения: max скорость 1 м/с
+float maxSpeed = 1.0; // м/с  // Фильтр движения: max скорость 1 м/с
 
 struct Position {
   float x, y, accuracy;
@@ -123,6 +123,7 @@ float xBuffer[7] = {0};
 float yBuffer[7] = {0};
 int bufferIdx = 0;
 
+#define MAX_MEASUREMENTS 7
 // === МЕДИАННЫЙ ФИЛЬТР С ОТСЕЧКОЙ ВЫБРОСОВ ===
 int numMeasurements = 7;
 long wifiDistances[3][7] = {0};
@@ -153,7 +154,7 @@ long getFilteredDistance(long arr[]) {
   long sum = 0;
   int count = 0;
   long threshold = 20 * 100; // 20 см в мм
-  for (int i = 0; i < NUM_MEASUREMENTS; i++) {
+  for (int i = 0; i < numMeasurements; i++) {
     if (abs(arr[i] - median) <= threshold) {
       sum += arr[i];
       count++;
