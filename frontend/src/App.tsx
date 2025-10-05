@@ -129,12 +129,6 @@ function useWebSocket(url: string) {
 }
 
 // -------------------- ADAPTIVE MAP CANVAS --------------------
-const getScale = (isMobile: boolean, isTablet: boolean): number => {
-  if (isMobile) return 30;  // Меньше масштаб на мобильных
-  if (isTablet) return 40;  // Средний масштаб на планшетах
-  return 50; // Полный масштаб на десктопе
-};
-
 interface MapCanvasProps {
   data: ESPData | null;
   showHistory?: boolean;
@@ -158,6 +152,18 @@ const MapCanvas: React.FC<MapCanvasProps> = ({
   const currentPosRef = useRef<Position>({ x: 0, y: 0, accuracy: 0 });
 
   const [dimensions, setDimensions] = useState({ width: 600, height: 400 });
+
+  // Константы комнаты
+  const ROOM_WIDTH = 1.5; // meters
+  const ROOM_HEIGHT = 1.5; // meters
+  const GRID_STEP = 0.1; // meters (сетка каждые 10 см)
+
+  // Позиции маячков в метрах (конвертировано из dm: 2=0.2m, 8=0.8m, etc.)
+    const beaconPositions = [
+    { x: 0.2, y: 1.3 }, // Beacon 1
+    { x: 1.3, y: 1.3 }, // Beacon 2
+    { x: 0.8, y: 0.2 }, // Beacon 3
+    ];
 
   // Адаптивные размеры канваса
   useEffect(() => {
@@ -207,8 +213,6 @@ const MapCanvas: React.FC<MapCanvasProps> = ({
     const ctx = canvasRef.current?.getContext("2d");
     if (!ctx) return;
 
-    const scale = getScale(isMobile, isTablet);
-
     function draw() {
       if (!ctx) return;
 
@@ -229,55 +233,67 @@ const MapCanvas: React.FC<MapCanvasProps> = ({
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, dimensions.width, dimensions.height);
 
-      // Сетка (только если достаточно места)
+      if (!data) return;
+
+      // Вычисление масштаба (px per meter), сохраняя aspect ratio комнаты
+      const scale = Math.min(
+        dimensions.width / ROOM_WIDTH,
+        dimensions.height / ROOM_HEIGHT
+      );
+
+      // Офсеты для центрирования комнаты на канвасе
+      const offsetX = (dimensions.width - ROOM_WIDTH * scale) / 2;
+      const offsetY = (dimensions.height - ROOM_HEIGHT * scale) / 2;
+
+      // Сетка (каждые 0.1m, только если достаточно места)
       if (!isMobile || dimensions.width > 300) {
         ctx.strokeStyle = "#333";
-        for (let x = 0; x <= dimensions.width; x += scale) {
+        ctx.lineWidth = 1;
+
+        // Вертикальные линии
+        for (let x = 0; x <= ROOM_WIDTH; x += GRID_STEP) {
+          const canvasX = offsetX + x * scale;
           ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, dimensions.height);
+          ctx.moveTo(canvasX, offsetY);
+          ctx.lineTo(canvasX, offsetY + ROOM_HEIGHT * scale);
           ctx.stroke();
         }
-        for (let y = 0; y <= dimensions.height; y += scale) {
+
+        // Горизонтальные линии
+        for (let y = 0; y <= ROOM_HEIGHT; y += GRID_STEP) {
+          const canvasY = offsetY + y * scale;
           ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(dimensions.width, y);
+          ctx.moveTo(offsetX, canvasY);
+          ctx.lineTo(offsetX + ROOM_WIDTH * scale, canvasY);
           ctx.stroke();
         }
       }
 
-      if (!data) return;
-
-      // Позиции для 3 ESP-меток (WiFi + BLE вместе)
-      const espPositions = [
-        // Метка 1: центр снизу
-        { x: dimensions.width / 2, y: dimensions.height - (isMobile ? 40 : 60) },
-        // Метка 2: слева сверху
-        { x: dimensions.width * 0.25, y: isMobile ? 40 : 60 },
-        // Метка 3: справа сверху
-        { x: dimensions.width * 0.75, y: isMobile ? 40 : 60 }
-      ];
-
       // Отрисовка ESP-меток (WiFi и BLE вместе)
-      espPositions.forEach((pos, index) => {
+      beaconPositions.forEach((beaconPos, index) => {
         const beaconNumber = index + 1;
         const wifiBeacon = data.wifi[`beacon${beaconNumber}`];
         const bleBeacon = data.ble[`beacon${beaconNumber}`];
 
+        // Позиция метки на канвасе (Y растет вниз, как в canvas)
+        const posX = offsetX + beaconPos.x * scale;
+        const posY = offsetY + beaconPos.y * scale;
+
         if (wifiBeacon) {
           // WiFi точка (слева от центра метки)
-          const wifiX = pos.x - 15;
+          const wifiX = posX - 8;
           ctx.fillStyle = "gold";
-          ctx.strokeStyle = "gold";
           ctx.beginPath();
-          ctx.arc(wifiX, pos.y, isMobile ? 4 : 6, 0, 2 * Math.PI);
+          ctx.arc(wifiX, posY, isMobile ? 3 : 5, 0, 2 * Math.PI);
           ctx.fill();
 
           // Радиус сигнала WiFi
           if (!isMobile || dimensions.width > 400) {
             ctx.globalAlpha = 0.2;
+            ctx.strokeStyle = "gold";
+            ctx.lineWidth = 1;
             ctx.beginPath();
-            ctx.arc(wifiX, pos.y, wifiBeacon.distance * scale, 0, 2 * Math.PI);
+            ctx.arc(wifiX, posY, wifiBeacon.distance * scale, 0, 2 * Math.PI);
             ctx.stroke();
             ctx.globalAlpha = 1;
           }
@@ -285,18 +301,19 @@ const MapCanvas: React.FC<MapCanvasProps> = ({
 
         if (bleBeacon) {
           // BLE точка (справа от центра метки)
-          const bleX = pos.x + 15;
+          const bleX = posX + 8;
           ctx.fillStyle = "deepskyblue";
-          ctx.strokeStyle = "deepskyblue";
           ctx.beginPath();
-          ctx.arc(bleX, pos.y, isMobile ? 4 : 6, 0, 2 * Math.PI);
+          ctx.arc(bleX, posY, isMobile ? 3 : 5, 0, 2 * Math.PI);
           ctx.fill();
 
           // Радиус сигнала BLE
           if (!isMobile || dimensions.width > 400) {
             ctx.globalAlpha = 0.2;
+            ctx.strokeStyle = "deepskyblue";
+            ctx.lineWidth = 1;
             ctx.beginPath();
-            ctx.arc(bleX, pos.y, bleBeacon.distance * scale, 0, 2 * Math.PI);
+            ctx.arc(bleX, posY, bleBeacon.distance * scale, 0, 2 * Math.PI);
             ctx.stroke();
             ctx.globalAlpha = 1;
           }
@@ -307,7 +324,7 @@ const MapCanvas: React.FC<MapCanvasProps> = ({
           ctx.fillStyle = "#fff";
           ctx.font = "12px Arial";
           ctx.textAlign = "center";
-          ctx.fillText(`ESP${beaconNumber}`, pos.x, pos.y - 25);
+          ctx.fillText(`ESP${beaconNumber}`, posX, posY - 20);
         }
       });
 
@@ -317,34 +334,36 @@ const MapCanvas: React.FC<MapCanvasProps> = ({
         ctx.lineWidth = isMobile ? 1.5 : 2;
         ctx.beginPath();
         positionsRef.current.forEach((pos, idx) => {
-          const x = pos.x * scale;
-          const y = pos.y * scale;
+          const x = offsetX + pos.x * scale;
+          const y = offsetY + pos.y * scale;
           if (idx === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         });
         ctx.stroke();
       }
 
-      // Текущий объект
-      const posX = currentPosRef.current.x * scale;
-      const posY = currentPosRef.current.y * scale;
+      // Текущий объект (приемник)
+      const posX = offsetX + currentPosRef.current.x * scale;
+      const posY = offsetY + currentPosRef.current.y * scale;
 
-      ctx.fillStyle = currentPosRef.current.accuracy > 2 ? "red" : "lime";
+      ctx.fillStyle = currentPosRef.current.accuracy > 0.4 ? "orange" : "lime";      
       ctx.beginPath();
-      ctx.arc(posX, posY, isMobile ? 8 : 10, 0, 2 * Math.PI);
+      ctx.arc(posX, posY, isMobile ? 6 : 8, 0, 2 * Math.PI);
       ctx.fill();
 
       // Accuracy circle
-      ctx.fillStyle = currentPosRef.current.accuracy > 2 ? "rgba(255,0,0,0.2)" : "rgba(0,255,0,0.2)";
+      ctx.fillStyle = currentPosRef.current.accuracy > 0.3 ? "rgba(255,165,0,0.2)" : "rgba(0,255,0,0.2)";
       ctx.beginPath();
       ctx.arc(posX, posY, currentPosRef.current.accuracy * scale, 0, 2 * Math.PI);
       ctx.fill();
 
       // CV точка
       if (data.cv) {
+        const cvX = offsetX + data.cv.x * scale;
+        const cvY = offsetY + data.cv.y * scale;
         ctx.fillStyle = "red";
         ctx.beginPath();
-        ctx.arc(data.cv.x * scale, data.cv.y * scale, isMobile ? 4 : 6, 0, 2 * Math.PI);
+        ctx.arc(cvX, cvY, isMobile ? 3 : 5, 0, 2 * Math.PI);
         ctx.fill();
       }
 
@@ -352,12 +371,35 @@ const MapCanvas: React.FC<MapCanvasProps> = ({
       if (!isMobile) {
         ctx.fillStyle = "#fff";
         ctx.font = "12px Arial";
+        ctx.textAlign = "left";
         ctx.fillText(
           `(${currentPosRef.current.x.toFixed(1)}, ${currentPosRef.current.y.toFixed(1)})`,
-          posX + 15,
-          posY - 10
+          posX + 10,
+          posY - 5
         );
       }
+
+      // Подписи осей (координаты комнаты)
+      if (!isMobile) {
+        ctx.fillStyle = "#888";
+        ctx.font = "10px Arial";
+        ctx.textAlign = "center";
+
+        // X labels
+        for (let x = 0; x <= ROOM_WIDTH; x += 0.3) {
+        const canvasX = offsetX + x * scale;
+        ctx.fillText(x.toFixed(1), canvasX, offsetY + ROOM_HEIGHT * scale + 15);
+        }
+
+        // Y labels
+        for (let y = 0; y <= ROOM_HEIGHT; y += 0.3) {
+        const canvasY = offsetY + y * scale;
+        ctx.save();
+        ctx.textAlign = "right";
+        ctx.fillText(y.toFixed(1), offsetX - 5, canvasY);
+        ctx.restore();
+        }
+    }
 
       animationRef.current = requestAnimationFrame(draw);
     }
@@ -514,7 +556,7 @@ const PositionInfo: React.FC<{ position: Position | null; isMobile?: boolean }> 
           <span className="label">Y:</span>
           <span className="value">{position.y.toFixed(2)} m</span>
         </div>
-        <div className={`coord-line accuracy ${position.accuracy > 2 ? 'low' : ''}`}>
+        <div className={`coord-line accuracy ${position.accuracy > 0.4 ? 'low' : ''}`}>
           <span className="label">Accuracy:</span>
           <span className="value">{position.accuracy.toFixed(2)} m</span>
         </div>
@@ -598,7 +640,7 @@ export default function App() {
   const { isMobile, isTablet } = useResponsive();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [history, setHistory] = useState<ESPData[]>([]);
-  const MOVEMENT_THRESHOLD = 0.5; // meters
+  const MOVEMENT_THRESHOLD = 0.075; // meters (adjusted for 1.5x1.5 room)
   const MAX_HISTORY = 50;
 
   // Update history on significant movement
@@ -698,7 +740,7 @@ export default function App() {
           <div className="legend">
             <span className="legend-item">
               <span className="color-dot object-dot"></span>
-              Object
+              Receiver
             </span>
             <span className="legend-item">
               <span className="color-dot wifi-dot"></span>
@@ -716,7 +758,7 @@ export default function App() {
             )}
           </div>
           <div className="scale-info">
-            Scale: 1m = {getScale(isMobile, isTablet)}px
+            Room: 1.5m x 1.5m | Grid: 10cm
           </div>
         </div>
       </footer>

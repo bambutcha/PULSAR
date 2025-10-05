@@ -28,12 +28,14 @@ struct Beacon {
   float bleDistance;
   bool wifiFound;
   bool bleFound;
+  int lastWifiRssi;
+  int lastBleRssi;
 };
 
 Beacon beacons[3] = {
-  {1, "Beacon_1", "BLE_Beacon_1", 0.0, 0.0, 0, 0, 0, 0, false, false},
-  {2, "Beacon_2", "BLE_Beacon_2", 5.0, 0.0, 0, 0, 0, 0, false, false},
-  {3, "Beacon_3", "BLE_Beacon_3", 2.5, 5.0, 0, 0, 0, 0, false, false}
+  {1, "Beacon_1", "BLE_Beacon_1", 0.2, 1.3, 0, 0, 0, 0, false, false},
+  {2, "Beacon_2", "BLE_Beacon_2", 1.3, 1.3, 0, 0, 0, 0, false, false},
+  {3, "Beacon_3", "BLE_Beacon_3", 0.8, 0.2, 0, 0, 0, 0, false, false}
 };
 
 const float WIFI_RSSI_AT_1M = -52;
@@ -373,6 +375,7 @@ void scanWiFi() {
     for (int j = 0; j < 3; j++) {
       if (ssid.equals(beacons[j].wifiName)) {
         beacons[j].wifiRSSI = rssi;
+        beacons[j].lastWifiRssi = rssi;
         beacons[j].wifiFound = true;
         beaconsFound++;
         
@@ -445,6 +448,7 @@ void scanBLE() {
     for (int j = 0; j < 3; j++) {
       if (name == beacons[j].bleName) {
         beacons[j].bleRSSI = rssi;
+        beacons[j].lastBleRssi = rssi;
         beacons[j].bleFound = true;
         beaconsFound++;
 
@@ -619,6 +623,23 @@ void calculatePosition() {
     
   } else {
     return; // Недостаточно маяков
+  }
+
+  if (beacons[0].lastBleRssi > beacons[1].lastBleRssi + 10 && beacons[0].lastBleRssi > beacons[2].lastBleRssi + 10) {
+    currentPos.x = beacons[0].x;
+    currentPos.y = beacons[0].y;
+    currentPos.accuracy = 0.1;
+    Serial.println("  📍 Attached to Beacon 1 (BLE)");
+  } else if (beacons[1].lastBleRssi > beacons[0].lastBleRssi + 10 && beacons[1].lastBleRssi > beacons[2].lastBleRssi + 10) {
+    currentPos.x = beacons[1].x;
+    currentPos.y = beacons[1].y;
+    currentPos.accuracy = 0.1;
+    Serial.println("  📍 Attached to Beacon 2 (BLE)");
+  } else if (beacons[2].lastBleRssi > beacons[0].lastBleRssi + 10 && beacons[2].lastBleRssi > beacons[1].lastBleRssi + 10) {
+    currentPos.x = beacons[2].x;
+    currentPos.y = beacons[2].y;
+    currentPos.accuracy = 0.1;
+    Serial.println("  📍 Attached to Beacon 3 (BLE)");
   }
   
   // Сглаживание
