@@ -88,11 +88,9 @@ void saveCalibration() {
 // ========================================
 const float PATH_LOSS = 2.5;
 
-// === ФИЛЬТР ДВИЖЕНИЯ ===
 float prevX = 0, prevY = 0;
 unsigned long prevTime = 0;
-const float maxSpeed = 1.0; // м/с
-// ========================
+const float maxSpeed = 1.0; // м/с  // Фильтр движения: max скорость 1 м/с
 
 struct Position {
   float x, y, accuracy;
@@ -331,7 +329,6 @@ void scanWiFi() {
         }
         // ========================================
 
-        // === ПРОВЕРКА НА АНОМАЛЬНОЕ ЗНАЧЕНИЕ ===
         if (beacons[j].wifiDistance > 10.0 || beacons[j].wifiDistance < 0.1) {
           Serial.print("  ⚠️ IGNORING ANOMALY: ");
           Serial.print(beacons[j].wifiName);
@@ -340,7 +337,6 @@ void scanWiFi() {
           Serial.println("m");
           continue; // пропускаем это значение
         }
-        // ======================================
 
         long rawWifiDistance = (long)(beacons[j].wifiDistance * 100); // в мм
         wifiDistances[j][measurementIndex[j]] = rawWifiDistance;
@@ -406,8 +402,7 @@ void scanBLE() {
           count[j] = 0;
           totalRssi[j] = 0;
 
-          // === ПРОВЕРКА НА АНОМАЛЬНОЕ ЗНАЧЕНИЕ ===
-          if (avgRssi > -30 || avgRssi < -90) { // пример: RSSI не должен быть > -30 или < -90
+          if (avgRssi > -15 || avgRssi < -90) { // RSSI не должен быть > -15 или < -90
             Serial.print("  ⚠️ AVG RSSI ANOMALY for ");
             Serial.print(beacons[j].bleName);
             Serial.print(" avgRssi: ");
@@ -415,7 +410,6 @@ void scanBLE() {
             Serial.println("dBm");
             continue; // пропускаем
           }
-          // ======================================
 
           // === ЛИНЕЙНАЯ ИНТЕРПОЛЯЦИЯ RSSI → DISTANCE ===
           float a = (0.5 - 1.0) / (rssiAt05m[j] - rssiAt1m[j]);
@@ -437,7 +431,6 @@ void scanBLE() {
             Serial.println("m");
             continue; // пропускаем это значение
           }
-          // ======================================
 
           // === ФИЛЬТРАЦИЯ РАССТОЯНИЯ ==================
           long rawBleDistance = (long)(beacons[j].bleDistance * 100); // в мм
@@ -583,7 +576,7 @@ void calculatePosition() {
   currentPos.x = smoothX / SMOOTH_SIZE;
   currentPos.y = smoothY / SMOOTH_SIZE;
 
-  // === ФИЛЬТР ДВИЖЕНИЯ ==================
+  // Фильтр движения: проверяет, возможна ли такая скорость
   unsigned long now = millis();
   float dt = (now - prevTime) / 1000.0;
 
@@ -610,7 +603,6 @@ void calculatePosition() {
     prevY = currentPos.y;
     prevTime = now;
   }
-  // ========================================
 }
 
 void printStatus() {
