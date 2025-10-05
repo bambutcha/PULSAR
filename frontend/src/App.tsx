@@ -381,14 +381,67 @@ const MapCanvas: React.FC<MapCanvasProps> = ({
   );
 };
 
+// -------------------- HISTORY COMPONENT --------------------
+const secondsToTime = (ms: number) => {
+  const sec = Math.floor(ms / 1000);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+};
+
+interface HistoryProps {
+  history: ESPData[];
+  isMobile?: boolean;
+}
+
+const History: React.FC<HistoryProps> = ({ history, isMobile = false }) => {
+  if (history.length === 0) return null;
+
+  return (
+    <InfoCard title="Movement History" isMobile={isMobile}>
+      <ul className={`history-list ${isMobile ? 'mobile' : ''}`}>
+        {history.map((entry, idx) => (
+          <li key={idx} className="history-entry">
+            <div className="history-time">Time: {secondsToTime(entry.timestamp)}</div>
+            <div className="history-pos">
+              Position: {entry.position.x.toFixed(2)}, {entry.position.y.toFixed(2)} m (acc: {entry.position.accuracy.toFixed(2)} m)
+            </div>
+            {entry.environment && (
+              <>
+                <div className="history-env">Temp: {entry.environment.temperature.toFixed(1)}°C</div>
+                <div className="history-env">Humidity: {entry.environment.humidity.toFixed(1)}%</div>
+              </>
+            )}
+            <div className="history-distances">
+              Distances:
+              {[1, 2, 3].map((b) => {
+                const wifiD = entry.wifi[`beacon${b}`]?.distance ?? 0;
+                const bleD = entry.ble[`beacon${b}`]?.distance ?? 0;
+                const effD = entry.fusion.wifi_weight * wifiD + entry.fusion.ble_weight * bleD;
+                return (
+                  <div key={b} className="history-distance-item">
+                    Beacon {b}: {effD.toFixed(2)} m
+                  </div>
+                );
+              })}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </InfoCard>
+  );
+};
+
 // -------------------- MOBILE SIDEBAR --------------------
 interface MobileSidebarProps {
   data: ESPData | null;
+  history: ESPData[];
   isOpen: boolean;
   onClose: () => void;
 }
 
-const MobileSidebar: React.FC<MobileSidebarProps> = ({ data, isOpen, onClose }) => {
+const MobileSidebar: React.FC<MobileSidebarProps> = ({ data, history, isOpen, onClose }) => {
   return (
     <div className={`mobile-sidebar ${isOpen ? 'open' : ''}`}>
       <div className="mobile-sidebar-header">
@@ -401,6 +454,7 @@ const MobileSidebar: React.FC<MobileSidebarProps> = ({ data, isOpen, onClose }) 
         <FusionInfo fusion={data?.fusion || null} isMobile={true} />
         <BeaconList beacons={data?.wifi || null} type="WiFi" isMobile={true} />
         <BeaconList beacons={data?.ble || null} type="BLE" isMobile={true} />
+        <History history={history} isMobile={true} />
       </div>
     </div>
   );
@@ -434,7 +488,13 @@ const EnvironmentInfo: React.FC<{ environment: Environment | null; isMobile?: bo
 };
 
 // -------------------- ADAPTIVE SIDEBAR COMPONENTS --------------------
-const InfoCard: React.FC<{ title: string; isMobile?: boolean }> = ({ title, children, isMobile = false }) => (
+interface InfoCardProps {
+  title: string;
+  isMobile?: boolean;
+  children: React.ReactNode;
+}
+
+const InfoCard: React.FC<InfoCardProps> = ({ title, children, isMobile = false }) => (
   <div className={`info-card ${isMobile ? 'mobile' : ''}`}>
     <h3>{title}</h3>
     {children}
@@ -537,6 +597,32 @@ export default function App() {
   const { data, connected } = useWebSocket("ws://localhost:8080/ws");
   const { isMobile, isTablet } = useResponsive();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [history, setHistory] = useState<ESPData[]>([]);
+  const MOVEMENT_THRESHOLD = 0.5; // meters
+  const MAX_HISTORY = 50;
+
+  // Update history on significant movement
+  useEffect(() => {
+    if (!data) return;
+
+    setHistory((prev) => {
+      if (prev.length === 0) {
+        return [data];
+      }
+
+      const last = prev[0];
+      const dx = data.position.x - last.position.x;
+      const dy = data.position.y - last.position.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      let newHist = prev;
+      if (dist > MOVEMENT_THRESHOLD) {
+        newHist = [data, ...prev];
+      }
+
+      return newHist.slice(0, MAX_HISTORY);
+    });
+  }, [data]);
 
   // Закрываем сайдбар при переходе на десктоп
   useEffect(() => {
@@ -584,6 +670,7 @@ export default function App() {
             <FusionInfo fusion={data?.fusion || null} />
             <BeaconList beacons={data?.wifi || null} type="WiFi" />
             <BeaconList beacons={data?.ble || null} type="BLE" />
+            <History history={history} />
           </aside>
         )}
 
@@ -591,6 +678,7 @@ export default function App() {
         {isMobile && (
           <MobileSidebar 
             data={data}
+            history={history}
             isOpen={sidebarOpen}
             onClose={() => setSidebarOpen(false)}
           />
