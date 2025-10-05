@@ -6,16 +6,16 @@
 #include <ArduinoJson.h>
 #include <math.h>
 #include "DHT.h"
+#include <EEPROM.h>
 
-// --- DHT11 ДАТЧИК ---
-#define DHTPIN 4     // Используйте свободный GPIO (например, GPIO 4)
-#define DHTTYPE DHT11 // Тип вашего датчика
+#define DHTPIN 4     
+#define DHTTYPE DHT11
 
 DHT dht(DHTPIN, DHTTYPE);
 
 float currentTemp = 0.0;
 float currentHumidity = 0.0;
-// --------------------
+
 
 struct Beacon {
   int id;
@@ -36,9 +36,63 @@ Beacon beacons[3] = {
   {3, "Beacon_3", "BLE_Beacon_3", 2.5, 5.0, 0, 0, 0, 0, false, false}
 };
 
-const float WIFI_RSSI_AT_1M = -40;
-const float BLE_RSSI_AT_1M = -59;
+const float WIFI_RSSI_AT_1M = -52;
+// const float BLE_RSSI_AT_1M = -59; // теперь не используется
+
+// === КАЛИБРОВКА BLE: RSSI НА 0.5 М И 1 М ===
+float rssiAt05m[3] = {-40, -40, -40}; // RSSI на 0.5 м
+float rssiAt1m[3] = {-59, -59, -59};   // RSSI на 1 м
+
+// === КАЛИБРОВКА WiFi: RSSI НА 0.5 М И 1 М ===
+float wifiRssiAt05m[3] = {-45, -45, -45}; // RSSI на 0.5 м
+float wifiRssiAt1m[3] = {-52, -52, -52};  // RSSI на 1 м
+
+// === ФУНКЦИИ ДЛЯ EEPROM ===================
+void loadCalibration() {
+  EEPROM.begin(60); // 12 (BLE 0.5m) + 12 (BLE 1m) + 12 (WiFi 0.5m) + 12 (WiFi 1m) + 12 (неиспользуемый) = 60
+  for (int i = 0; i < 3; i++) {
+    EEPROM.get(i * sizeof(float), rssiAt05m[i]);
+    if (isnan(rssiAt05m[i]) || rssiAt05m[i] == 0.0) rssiAt05m[i] = -40;
+  }
+  for (int i = 0; i < 3; i++) {
+    EEPROM.get(12 + i * sizeof(float), rssiAt1m[i]);
+    if (isnan(rssiAt1m[i]) || rssiAt1m[i] == 0.0) rssiAt1m[i] = -59;
+  }
+  for (int i = 0; i < 3; i++) {
+    EEPROM.get(24 + i * sizeof(float), wifiRssiAt05m[i]);
+    if (isnan(wifiRssiAt05m[i]) || wifiRssiAt05m[i] == 0.0) wifiRssiAt05m[i] = -45;
+  }
+  for (int i = 0; i < 3; i++) {
+    EEPROM.get(36 + i * sizeof(float), wifiRssiAt1m[i]);
+    if (isnan(wifiRssiAt1m[i]) || wifiRssiAt1m[i] == 0.0) wifiRssiAt1m[i] = -52;
+  }
+  Serial.println("Calibration loaded from EEPROM.");
+}
+
+void saveCalibration() {
+  for (int i = 0; i < 3; i++) {
+    EEPROM.put(i * sizeof(float), rssiAt05m[i]);
+  }
+  for (int i = 0; i < 3; i++) {
+    EEPROM.put(12 + i * sizeof(float), rssiAt1m[i]);
+  }
+  for (int i = 0; i < 3; i++) {
+    EEPROM.put(24 + i * sizeof(float), wifiRssiAt05m[i]);
+  }
+  for (int i = 0; i < 3; i++) {
+    EEPROM.put(36 + i * sizeof(float), wifiRssiAt1m[i]);
+  }
+  EEPROM.commit();
+  Serial.println("Calibration saved to EEPROM.");
+}
+// ========================================
 const float PATH_LOSS = 2.5;
+
+// === ФИЛЬТР ДВИЖЕНИЯ ===
+float prevX = 0, prevY = 0;
+unsigned long prevTime = 0;
+const float maxSpeed = 1.0; // м/с
+// ========================
 
 struct Position {
   float x, y, accuracy;
@@ -49,17 +103,58 @@ struct Position {
 
 BLEScan* pBLEScan;
 
-#define SMOOTH_SIZE 3
+#define SMOOTH_SIZE 7
 float xBuffer[SMOOTH_SIZE] = {0};
 float yBuffer[SMOOTH_SIZE] = {0};
 int bufferIdx = 0;
 
+// === МЕДИАННЫЙ ФИЛЬТР С ОТСЕЧКОЙ ВЫБРОСОВ ===
+#define NUM_MEASUREMENTS 7
+long wifiDistances[3][NUM_MEASUREMENTS] = {0};
+long bleDistances[3][NUM_MEASUREMENTS] = {0};
+int measurementIndex[3] = {0, 0, 0};
+bool wifiBufferFull[3] = {false};
+bool bleBufferFull[3] = {false};
+bool wifiStable[3] = {false};
+bool bleStable[3] = {false};
+
+// Функция для получения усредненного значения с отсечкой выбросов
+long getFilteredDistance(long arr[]) {
+  long sorted[NUM_MEASUREMENTS];
+  memcpy(sorted, arr, sizeof(long) * NUM_MEASUREMENTS);
+  for (int i = 0; i < NUM_MEASUREMENTS - 1; ++i) {
+    for (int j = 0; j < NUM_MEASUREMENTS - 1 - i; ++j) {
+      if (sorted[j] > sorted[j + 1]) {
+        long temp = sorted[j];
+        sorted[j] = sorted[j + 1];
+        sorted[j + 1] = temp;
+      }
+    }
+  }
+  // Используем медиану как опорную точку
+  long median = sorted[NUM_MEASUREMENTS / 2];
+
+  // Считаем усредненное значение с отсечкой выбросов (±20 см)
+  long sum = 0;
+  int count = 0;
+  long threshold = 20 * 100; // 20 см в мм
+  for (int i = 0; i < NUM_MEASUREMENTS; i++) {
+    if (abs(arr[i] - median) <= threshold) {
+      sum += arr[i];
+      count++;
+    }
+  }
+  if (count == 0) {
+    return median; // если все выбросы — возвращаем медиану
+  }
+  return sum / count;
+}
+// ===================================
+
 unsigned long lastScan = 0;
 const int SCAN_INTERVAL = 1000; // 1 секунда
 
-// --- ФУНКЦИЯ ЧТЕНИЯ DHT ---
 void readDHT() {
-  // Чтение занимает около 1 секунды, не вызывайте чаще
   float h = dht.readHumidity();
   float t = dht.readTemperature(); 
   
@@ -75,14 +170,14 @@ void readDHT() {
   Serial.print("  Temp: "); Serial.print(currentTemp, 1); Serial.print("°C | ");
   Serial.print("Humidity: "); Serial.print(currentHumidity, 1); Serial.println("%");
 }
-// -------------------------
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
   
-  // Инициализация DHT
   dht.begin();
+  
+  loadCalibration(); // загружаем калибровку
   
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
@@ -97,11 +192,104 @@ void setup() {
 
 void loop() {
   unsigned long now = millis();
-  
+
+  // === КАЛИБРОВКА ПО Serial ==================
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+
+    if (cmd.startsWith("cal_wifi_05")) {
+      int beaconId = cmd.charAt(12) - '1';
+      float newRssi = cmd.substring(14).toFloat();
+
+      if (beaconId >= 0 && beaconId < 3) {
+        wifiRssiAt05m[beaconId] = newRssi;
+        Serial.print("WiFi Cal 0.5m Beacon ");
+        Serial.print(beaconId + 1);
+        Serial.print(" RSSI = ");
+        Serial.print(newRssi, 1);
+        Serial.println(" dBm");
+        saveCalibration();
+      } else {
+        Serial.println("Invalid beacon ID. Use: cal_wifi_05 1 -45");
+      }
+    }
+    else if (cmd.startsWith("cal_wifi_1")) {
+      int beaconId = cmd.charAt(10) - '1';
+      float newRssi = cmd.substring(12).toFloat();
+
+      if (beaconId >= 0 && beaconId < 3) {
+        wifiRssiAt1m[beaconId] = newRssi;
+        Serial.print("WiFi Cal 1m Beacon ");
+        Serial.print(beaconId + 1);
+        Serial.print(" RSSI = ");
+        Serial.print(newRssi, 1);
+        Serial.println(" dBm");
+        saveCalibration();
+      } else {
+        Serial.println("Invalid beacon ID. Use: cal_wifi_1 1 -50");
+      }
+    }
+    else if (cmd.startsWith("cal_ble_05")) {
+      int beaconId = cmd.charAt(11) - '1';
+      float newRssi = cmd.substring(13).toFloat();
+
+      if (beaconId >= 0 && beaconId < 3) {
+        rssiAt05m[beaconId] = newRssi;
+        Serial.print("BLE Cal 0.5m Beacon ");
+        Serial.print(beaconId + 1);
+        Serial.print(" RSSI = ");
+        Serial.print(newRssi, 1);
+        Serial.println(" dBm");
+        saveCalibration();
+      } else {
+        Serial.println("Invalid beacon ID. Use: cal_ble_05 1 -42");
+      }
+    }
+    else if (cmd.startsWith("cal_ble_1")) {
+      int beaconId = cmd.charAt(9) - '1';
+      float newRssi = cmd.substring(11).toFloat();
+
+      if (beaconId >= 0 && beaconId < 3) {
+        rssiAt1m[beaconId] = newRssi;
+        Serial.print("BLE Cal 1m Beacon ");
+        Serial.print(beaconId + 1);
+        Serial.print(" RSSI = ");
+        Serial.print(newRssi, 1);
+        Serial.println(" dBm");
+        saveCalibration();
+      } else {
+        Serial.println("Invalid beacon ID. Use: cal_ble_1 1 -55");
+      }
+    }
+    else if (cmd.equals("reset_position")) {
+      currentPos.x = 0.0;
+      currentPos.y = 0.0;
+      currentPos.accuracy = 0.0;
+      currentPos.wifiX = 0.0;
+      currentPos.wifiY = 0.0;
+      currentPos.wifiAccuracy = 0.0;
+      currentPos.bleX = 0.0;
+      currentPos.bleY = 0.0;
+      currentPos.bleAccuracy = 0.0;
+      currentPos.wifiWeight = 0.0;
+      currentPos.bleWeight = 0.0;
+
+      // Очищаем буфер сглаживания
+      for (int i = 0; i < SMOOTH_SIZE; i++) {
+        xBuffer[i] = 0.0;
+        yBuffer[i] = 0.0;
+      }
+      bufferIdx = 0;
+
+      Serial.println("Position reset to (0, 0).");
+    }
+  }
+  // ========================================
+
   if (now - lastScan > SCAN_INTERVAL) {
     lastScan = now;
     
-    // Вызов функции чтения DHT
     readDHT();
     
     scanWiFi();
@@ -132,10 +320,43 @@ void scanWiFi() {
         beacons[j].wifiFound = true;
         beaconsFound++;
         
-        // Расчет расстояния
-        float ratio = (WIFI_RSSI_AT_1M - rssi) / (10.0 * PATH_LOSS);
-        beacons[j].wifiDistance = pow(10, ratio);
-        
+        // === ЛИНЕЙНАЯ ИНТЕРПОЛЯЦИЯ RSSI → DISTANCE ===
+        float a = (0.5 - 1.0) / (wifiRssiAt05m[j] - wifiRssiAt1m[j]);
+        float b = 1.0 - a * wifiRssiAt1m[j];
+        beacons[j].wifiDistance = a * rssi + b;
+
+        // Ограничиваем минимальное расстояние
+        if (beacons[j].wifiDistance < 0.1) {
+          beacons[j].wifiDistance = 0.1;
+        }
+        // ========================================
+
+        // === ПРОВЕРКА НА АНОМАЛЬНОЕ ЗНАЧЕНИЕ ===
+        if (beacons[j].wifiDistance > 10.0 || beacons[j].wifiDistance < 0.1) {
+          Serial.print("  ⚠️ IGNORING ANOMALY: ");
+          Serial.print(beacons[j].wifiName);
+          Serial.print(" | Dist: ");
+          Serial.print(beacons[j].wifiDistance, 1);
+          Serial.println("m");
+          continue; // пропускаем это значение
+        }
+        // ======================================
+
+        long rawWifiDistance = (long)(beacons[j].wifiDistance * 100); // в мм
+        wifiDistances[j][measurementIndex[j]] = rawWifiDistance;
+        measurementIndex[j]++;
+        if (measurementIndex[j] >= NUM_MEASUREMENTS) {
+          wifiBufferFull[j] = true;
+          measurementIndex[j] = 0;
+        }
+
+        if (wifiBufferFull[j]) {
+          long filtered = getFilteredDistance(wifiDistances[j]);
+          beacons[j].wifiDistance = filtered / 100.0; // делим обратно
+          // Проверим, стабильно ли значение
+          wifiStable[j] = true; // можно улучшить проверку, если нужно
+        }
+
         Serial.print("  ✅ ");
         Serial.print(beacons[j].wifiName);
         Serial.print(" | RSSI: ");
@@ -172,18 +393,77 @@ void scanBLE() {
         beacons[j].bleRSSI = rssi;
         beacons[j].bleFound = true;
         beaconsFound++;
-        
-        // Расчет расстояния
-        float ratio = (BLE_RSSI_AT_1M - rssi) / (10.0 * PATH_LOSS);
-        beacons[j].bleDistance = pow(10, ratio);
-        
-        Serial.print("  ✅ ");
-        Serial.print(beacons[j].bleName);
-        Serial.print(" | RSSI: ");
-        Serial.print(rssi);
-        Serial.print(" | Dist: ");
-        Serial.print(beacons[j].bleDistance, 1);
-        Serial.println("m");
+
+        // === УСРЕДНЕНИЕ RSSI ==================
+        static int count[3] = {0};  // счётчик для каждого маяка
+        static int totalRssi[3] = {0}; // сумма RSSI
+
+        totalRssi[j] += rssi;
+        count[j]++;
+
+        if (count[j] >= 3) { // усредняем за 3 измерения
+          float avgRssi = (float)totalRssi[j] / count[j];
+          count[j] = 0;
+          totalRssi[j] = 0;
+
+          // === ПРОВЕРКА НА АНОМАЛЬНОЕ ЗНАЧЕНИЕ ===
+          if (avgRssi > -30 || avgRssi < -90) { // пример: RSSI не должен быть > -30 или < -90
+            Serial.print("  ⚠️ AVG RSSI ANOMALY for ");
+            Serial.print(beacons[j].bleName);
+            Serial.print(" avgRssi: ");
+            Serial.print(avgRssi, 1);
+            Serial.println("dBm");
+            continue; // пропускаем
+          }
+          // ======================================
+
+          // === ЛИНЕЙНАЯ ИНТЕРПОЛЯЦИЯ RSSI → DISTANCE ===
+          float a = (0.5 - 1.0) / (rssiAt05m[j] - rssiAt1m[j]);
+          float b = 1.0 - a * rssiAt1m[j];
+          beacons[j].bleDistance = a * avgRssi + b;
+
+          // Ограничиваем минимальное расстояние
+          if (beacons[j].bleDistance < 0.1) {
+            beacons[j].bleDistance = 0.1;
+          }
+          // ========================================
+
+          // === ПРОВЕРКА НА АНОМАЛЬНОЕ ЗНАЧЕНИЕ (расстояние) ===
+          if (beacons[j].bleDistance > 10.0 || beacons[j].bleDistance < 0.1) {
+            Serial.print("  ⚠️ IGNORING ANOMALY: ");
+            Serial.print(beacons[j].bleName);
+            Serial.print(" | Dist: ");
+            Serial.print(beacons[j].bleDistance, 1);
+            Serial.println("m");
+            continue; // пропускаем это значение
+          }
+          // ======================================
+
+          // === ФИЛЬТРАЦИЯ РАССТОЯНИЯ ==================
+          long rawBleDistance = (long)(beacons[j].bleDistance * 100); // в мм
+          bleDistances[j][measurementIndex[j]] = rawBleDistance;
+          measurementIndex[j]++;
+          if (measurementIndex[j] >= NUM_MEASUREMENTS) {
+            bleBufferFull[j] = true;
+            measurementIndex[j] = 0;
+          }
+
+          if (bleBufferFull[j]) {
+            long filtered = getFilteredDistance(bleDistances[j]);
+            beacons[j].bleDistance = filtered / 100.0; // делим обратно
+            bleStable[j] = true; // можно улучшить проверку, если нужно
+          }
+          // ==========================================
+
+          Serial.print("  ✅ ");
+          Serial.print(beacons[j].bleName);
+          Serial.print(" | RSSI: ");
+          Serial.print(avgRssi, 1); // показываем усреднённый RSSI
+          Serial.print(" | Dist: ");
+          Serial.print(beacons[j].bleDistance, 1);
+          Serial.println("m");
+        }
+        // ========================================
       }
     }
   }
@@ -240,7 +520,7 @@ bool trilaterate(float d1, float d2, float d3,
 void calculatePosition() {
   // Трилатерация по WiFi
   bool wifiOK = false;
-  if (beacons[0].wifiFound && beacons[1].wifiFound && beacons[2].wifiFound) {
+  if (wifiStable[0] && wifiStable[1] && wifiStable[2]) {
     wifiOK = trilaterate(
       beacons[0].wifiDistance, beacons[1].wifiDistance, beacons[2].wifiDistance,
       beacons[0].x, beacons[0].y, beacons[1].x, beacons[1].y, beacons[2].x, beacons[2].y,
@@ -250,7 +530,7 @@ void calculatePosition() {
   
   // Трилатерация по BLE
   bool bleOK = false;
-  if (beacons[0].bleFound && beacons[1].bleFound && beacons[2].bleFound) {
+  if (bleStable[0] && bleStable[1] && bleStable[2]) {
     bleOK = trilaterate(
       beacons[0].bleDistance, beacons[1].bleDistance, beacons[2].bleDistance,
       beacons[0].x, beacons[0].y, beacons[1].x, beacons[1].y, beacons[2].x, beacons[2].y,
@@ -302,6 +582,35 @@ void calculatePosition() {
   }
   currentPos.x = smoothX / SMOOTH_SIZE;
   currentPos.y = smoothY / SMOOTH_SIZE;
+
+  // === ФИЛЬТР ДВИЖЕНИЯ ==================
+  unsigned long now = millis();
+  float dt = (now - prevTime) / 1000.0;
+
+  if (prevTime != 0 && dt > 0) {
+    float dx = currentPos.x - prevX;
+    float dy = currentPos.y - prevY;
+    float dist = sqrt(dx * dx + dy * dy);
+    float speed = dist / dt;
+
+    if (speed > maxSpeed) {
+      // Прыжок слишком большой — игнорируем
+      currentPos.x = prevX;
+      currentPos.y = prevY;
+      Serial.println("  ⚠️ Movement filter: Ignoring large jump.");
+    } else {
+      // Все ок — обновляем
+      prevX = currentPos.x;
+      prevY = currentPos.y;
+      prevTime = now;
+    }
+  } else {
+    // Первый раз — просто обновляем
+    prevX = currentPos.x;
+    prevY = currentPos.y;
+    prevTime = now;
+  }
+  // ========================================
 }
 
 void printStatus() {
