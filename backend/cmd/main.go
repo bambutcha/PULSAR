@@ -123,19 +123,31 @@ func handleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 // Serial Reader
 type SerialReader struct {
-	port   serial.Port
-	hub    *Hub
-	logger *logger.Logger
+	port         serial.Port
+	portName     string
+	hub          *Hub
+	logger       *logger.Logger
+	reconnect    chan bool
+	stopReconnect chan bool
+	stopReading  chan bool
+	isReading    bool
 }
 
 func NewSerialReader(hub *Hub, logger *logger.Logger) *SerialReader {
 	return &SerialReader{
-		hub:    hub,
-		logger: logger,
+		hub:           hub,
+		logger:        logger,
+		reconnect:     make(chan bool, 1),
+		stopReconnect: make(chan bool, 1),
+		stopReading:   make(chan bool, 1),
+		isReading:     false,
 	}
 }
 
 func (sr *SerialReader) Connect(portName string) error {
+	// Сохраняем имя порта даже при неудачном подключении
+	sr.portName = portName
+	
 	mode := &serial.Mode{
 		BaudRate: 115200,
 		DataBits: 8,
@@ -153,9 +165,86 @@ func (sr *SerialReader) Connect(portName string) error {
 	return nil
 }
 
+func (sr *SerialReader) StopReading() {
+	if sr.isReading {
+		sr.logger.Debug("🛑 Stopping serial reading...")
+		sr.stopReading <- true
+		sr.isReading = false
+	}
+}
+
+func (sr *SerialReader) StartReading() {
+	if !sr.isReading {
+		sr.isReading = true
+		go sr.ReadAndBroadcast()
+	}
+}
+
+// Функция автоматического переподключения
+func (sr *SerialReader) StartReconnectLoop() {
+	go func() {
+		reconnectInterval := 5 * time.Second
+		
+		for {
+			select {
+			case <-sr.reconnect:
+				sr.logger.Warning("🔄 Attempting to reconnect to serial port...")
+				
+				// Останавливаем текущее чтение
+				sr.StopReading()
+				
+				// Закрываем текущее соединение если оно есть
+				if sr.port != nil {
+					sr.port.Close()
+					sr.port = nil
+				}
+				
+				// Попытка переподключения
+				for {
+					select {
+					case <-sr.stopReconnect:
+						sr.logger.Info("🛑 Stopping reconnect loop")
+						return
+					default:
+						if err := sr.Connect(sr.portName); err != nil {
+							sr.logger.Warning("⚠️  Reconnect failed to %s: %v. Retrying in %v...", sr.portName, err, reconnectInterval)
+							time.Sleep(reconnectInterval)
+							continue
+						}
+						
+						sr.logger.Info("✅ Successfully reconnected to serial port")
+						// Запускаем чтение данных снова
+						sr.StartReading()
+						return
+					}
+				}
+			case <-sr.stopReconnect:
+				sr.logger.Info("🛑 Stopping reconnect loop")
+				return
+			}
+		}
+	}()
+}
+
+func (sr *SerialReader) TriggerReconnect() {
+	select {
+	case sr.reconnect <- true:
+	default:
+		// Канал уже содержит сигнал переподключения
+	}
+}
+
+func (sr *SerialReader) StopReconnect() {
+	select {
+	case sr.stopReconnect <- true:
+	default:
+	}
+}
+
 func (sr *SerialReader) ReadAndBroadcast() {
 	if sr.port == nil {
 		sr.logger.Error("Serial port not connected")
+		sr.isReading = false
 		return
 	}
 
@@ -164,6 +253,14 @@ func (sr *SerialReader) ReadAndBroadcast() {
 	scanner.Buffer(buf, 1024*1024)   // Максимум 1MB
 	
 	for scanner.Scan() {
+		// Проверяем сигнал остановки
+		select {
+		case <-sr.stopReading:
+			sr.logger.Debug("🛑 Reading stopped by signal")
+			sr.isReading = false
+			return
+		default:
+		}
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
@@ -207,83 +304,23 @@ func (sr *SerialReader) ReadAndBroadcast() {
 
 	if err := scanner.Err(); err != nil {
 		sr.logger.Error("❌ Serial scanner error: %v", err)
+		sr.logger.Warning("🔄 Connection lost, triggering reconnect...")
+		sr.isReading = false
+		sr.TriggerReconnect()
+	} else {
+		sr.isReading = false
 	}
 }
 
 func (sr *SerialReader) Close() error {
+	sr.StopReconnect()
+	sr.StopReading()
 	if sr.port != nil {
 		return sr.port.Close()
 	}
 	return nil
 }
 
-// Генератор тестовых данных для демонстрации
-func (sr *SerialReader) GenerateTestData() {
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	// Начальная позиция
-	x, y := 1.0, 1.0
-	direction := 1.0
-
-	for range ticker.C {
-		// Симуляция движения по кругу
-		x += 0.1 * direction
-		y += 0.05 * direction
-		
-		if x > 4.0 || x < 0.5 {
-			direction *= -1
-		}
-
-		// Создание тестовых данных
-		testData := ESP32Data{
-			Timestamp: time.Now().UnixMilli(),
-			Position: Position{
-				X:        x,
-				Y:        y,
-				Accuracy: 0.5 + (x/10.0), // Изменяющаяся точность
-			},
-			WiFi: map[string]BeaconData{
-				"beacon1": {RSSI: -45, Distance: 2.1, Found: true},
-				"beacon2": {RSSI: -52, Distance: 3.4, Found: true},
-				"beacon3": {RSSI: -48, Distance: 2.8, Found: true},
-			},
-			BLE: map[string]BeaconData{
-				"beacon1": {RSSI: -65, Distance: 2.3, Found: true},
-				"beacon2": {RSSI: -72, Distance: 3.6, Found: true},
-				"beacon3": {RSSI: -68, Distance: 3.0, Found: true},
-			},
-			Fusion: FusionData{
-				WiFiWeight: 0.6,
-				BLEWeight:  0.4,
-			},
-			Environment: EnvironmentData{
-				Temperature: 22.5 + (x/10.0), // Симуляция изменения температуры
-				Humidity:    45.0 + (y/5.0),   // Симуляция изменения влажности
-			},
-		}
-
-		// Создание WebSocket сообщения
-		wsMessage := WSMessage{
-			Type:      "position_update",
-			Data:      testData,
-			Timestamp: time.Now().UnixMilli(),
-		}
-
-		// Конвертация в JSON
-		messageBytes, err := json.Marshal(wsMessage)
-		if err != nil {
-			sr.logger.Error("❌ Failed to marshal test message: %v", err)
-			continue
-		}
-
-		// Отправка через WebSocket Hub
-		sr.hub.broadcast <- messageBytes
-		sr.logger.Debug("🧪 Test data: (%.2f, %.2f) ±%.2fm | Temp: %.1f°C, Humidity: %.1f%%", 
-			testData.Position.X, testData.Position.Y, testData.Position.Accuracy,
-			testData.Environment.Temperature, testData.Environment.Humidity)
-	}
-}
 
 func main() {
 	// Инициализация логгера
@@ -309,18 +346,23 @@ func main() {
 		portName = os.Args[1]
 	}
 	
+	// Запуск цикла переподключения
+	serialReader.StartReconnectLoop()
+	
+	// Попытка первоначального подключения
 	if err := serialReader.Connect(portName); err != nil {
-		logger.Warning("⚠️  Serial connection failed: %v", err)
-		logger.Warning("💡 Usage: %s [serial_port]", os.Args[0])
-		logger.Warning("💡 Example: %s /dev/ttyUSB0", os.Args[0])
-		logger.Info("🧪 Starting test data generator for demo...")
-		// Запуск генератора тестовых данных
-		go serialReader.GenerateTestData()
+		logger.Warning("⚠️  Initial serial connection failed: %v", err)
+		logger.Info("🔄 Will attempt to reconnect automatically...")
+		logger.Info("💡 Usage: %s [serial_port]", os.Args[0])
+		logger.Info("💡 Example: %s /dev/ttyUSB0", os.Args[0])
+		// Запускаем переподключение
+		serialReader.TriggerReconnect()
 	} else {
-		defer serialReader.Close()
-		// Запуск чтения Serial порта в отдельной горутине
-		go serialReader.ReadAndBroadcast()
+		// Запуск чтения Serial порта
+		serialReader.StartReading()
 	}
+	
+	defer serialReader.Close()
 
 	// HTTP сервер для WebSocket
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
