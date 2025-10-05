@@ -85,6 +85,23 @@ void saveCalibration() {
   EEPROM.commit();
   Serial.println("Calibration saved to EEPROM.");
 }
+
+void loadBeaconPositions() {
+  for (int i = 0; i < 3; i++) {
+    EEPROM.get(60 + i * sizeof(float), beacons[i].x);
+    EEPROM.get(60 + 12 + i * sizeof(float), beacons[i].y);
+  }
+  Serial.println("Beacon positions loaded from EEPROM.");
+}
+
+void saveBeaconPositions() {
+  for (int i = 0; i < 3; i++) {
+    EEPROM.put(60 + i * sizeof(float), beacons[i].x);
+    EEPROM.put(60 + 12 + i * sizeof(float), beacons[i].y);
+  }
+  EEPROM.commit();
+  Serial.println("Beacon positions saved to EEPROM.");
+}
 // ========================================
 const float PATH_LOSS = 2.5;
 
@@ -101,15 +118,15 @@ struct Position {
 
 BLEScan* pBLEScan;
 
-#define SMOOTH_SIZE 7
-float xBuffer[SMOOTH_SIZE] = {0};
-float yBuffer[SMOOTH_SIZE] = {0};
+int smoothSize = 7;
+float xBuffer[7] = {0};
+float yBuffer[7] = {0};
 int bufferIdx = 0;
 
 // === МЕДИАННЫЙ ФИЛЬТР С ОТСЕЧКОЙ ВЫБРОСОВ ===
-#define NUM_MEASUREMENTS 7
-long wifiDistances[3][NUM_MEASUREMENTS] = {0};
-long bleDistances[3][NUM_MEASUREMENTS] = {0};
+int numMeasurements = 7;
+long wifiDistances[3][7] = {0};
+long bleDistances[3][7] = {0};
 int measurementIndex[3] = {0, 0, 0};
 bool wifiBufferFull[3] = {false};
 bool bleBufferFull[3] = {false};
@@ -118,10 +135,10 @@ bool bleStable[3] = {false};
 
 // Функция для получения усредненного значения с отсечкой выбросов
 long getFilteredDistance(long arr[]) {
-  long sorted[NUM_MEASUREMENTS];
-  memcpy(sorted, arr, sizeof(long) * NUM_MEASUREMENTS);
-  for (int i = 0; i < NUM_MEASUREMENTS - 1; ++i) {
-    for (int j = 0; j < NUM_MEASUREMENTS - 1 - i; ++j) {
+  long sorted[MAX_MEASUREMENTS];
+  memcpy(sorted, arr, sizeof(long) * MAX_MEASUREMENTS);
+  for (int i = 0; i < MAX_MEASUREMENTS - 1; ++i) {
+    for (int j = 0; j < MAX_MEASUREMENTS - 1 - i; ++j) {
       if (sorted[j] > sorted[j + 1]) {
         long temp = sorted[j];
         sorted[j] = sorted[j + 1];
@@ -130,7 +147,7 @@ long getFilteredDistance(long arr[]) {
     }
   }
   // Используем медиану как опорную точку
-  long median = sorted[NUM_MEASUREMENTS / 2];
+  long median = sorted[MAX_MEASUREMENTS / 2];
 
   // Считаем усредненное значение с отсечкой выбросов (±20 см)
   long sum = 0;
@@ -176,6 +193,7 @@ void setup() {
   dht.begin();
   
   loadCalibration(); // загружаем калибровку
+  loadBeaconPositions(); // загружаем координаты маяков
   
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
@@ -260,6 +278,45 @@ void loop() {
         Serial.println("Invalid beacon ID. Use: cal_ble_1 1 -55");
       }
     }
+    else if (cmd.startsWith("set_beacon_pos")) {
+      int beaconId = cmd.charAt(15) - '1';
+      int space1 = cmd.indexOf(' ', 16);
+      int space2 = cmd.indexOf(' ', space1 + 1);
+      float x = cmd.substring(space1 + 1, space2).toFloat();
+      float y = cmd.substring(space2 + 1).toFloat();
+
+      if (beaconId >= 0 && beaconId < 3) {
+        beacons[beaconId].x = x;
+        beacons[beaconId].y = y;
+        Serial.print("Beacon ");
+        Serial.print(beaconId + 1);
+        Serial.print(" set to (");
+        Serial.print(x, 1);
+        Serial.print(", ");
+        Serial.print(y, 1);
+        Serial.println(")");
+      } else {
+        Serial.println("Invalid beacon ID. Use: set_beacon_pos 1 0.0 0.0");
+      }
+    }
+    else if (cmd.equals("save_beacons")) {
+      saveBeaconPositions();
+    }
+    else if (cmd.equals("set_mode fast")) {
+      numMeasurements = 3;
+      smoothSize = 3;
+      maxSpeed = 3.0;
+      Serial.println("Mode set to FAST (less smooth, faster response).");
+    }
+    else if (cmd.equals("set_mode stable")) {
+      numMeasurements = 7;
+      smoothSize = 7;
+      maxSpeed = 1.0;
+      Serial.println("Mode set to STABLE (smoother, slower response).");
+    }
+    else if (cmd.equals("load_beacons")) {
+      loadBeaconPositions();
+    }
     else if (cmd.equals("reset_position")) {
       currentPos.x = 0.0;
       currentPos.y = 0.0;
@@ -274,7 +331,7 @@ void loop() {
       currentPos.bleWeight = 0.0;
 
       // Очищаем буфер сглаживания
-      for (int i = 0; i < SMOOTH_SIZE; i++) {
+      for (int i = 0; i < smoothSize; i++) {
         xBuffer[i] = 0.0;
         yBuffer[i] = 0.0;
       }
@@ -341,7 +398,7 @@ void scanWiFi() {
         long rawWifiDistance = (long)(beacons[j].wifiDistance * 100); // в мм
         wifiDistances[j][measurementIndex[j]] = rawWifiDistance;
         measurementIndex[j]++;
-        if (measurementIndex[j] >= NUM_MEASUREMENTS) {
+        if (measurementIndex[j] >= numMeasurements) {
           wifiBufferFull[j] = true;
           measurementIndex[j] = 0;
         }
@@ -436,7 +493,7 @@ void scanBLE() {
           long rawBleDistance = (long)(beacons[j].bleDistance * 100); // в мм
           bleDistances[j][measurementIndex[j]] = rawBleDistance;
           measurementIndex[j]++;
-          if (measurementIndex[j] >= NUM_MEASUREMENTS) {
+          if (measurementIndex[j] >= numMeasurements) {
             bleBufferFull[j] = true;
             measurementIndex[j] = 0;
           }
@@ -566,15 +623,15 @@ void calculatePosition() {
   // Сглаживание
   xBuffer[bufferIdx] = currentPos.x;
   yBuffer[bufferIdx] = currentPos.y;
-  bufferIdx = (bufferIdx + 1) % SMOOTH_SIZE;
+  bufferIdx = (bufferIdx + 1) % smoothSize;
   
   float smoothX = 0, smoothY = 0;
-  for (int i = 0; i < SMOOTH_SIZE; i++) {
+  for (int i = 0; i < smoothSize; i++) {
     smoothX += xBuffer[i];
     smoothY += yBuffer[i];
   }
-  currentPos.x = smoothX / SMOOTH_SIZE;
-  currentPos.y = smoothY / SMOOTH_SIZE;
+  currentPos.x = smoothX / smoothSize;
+  currentPos.y = smoothY / smoothSize;
 
   // Фильтр движения: проверяет, возможна ли такая скорость
   unsigned long now = millis();
